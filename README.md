@@ -49,6 +49,7 @@ Backups will run automatically **every 4 hours** (02:00, 06:00, 10:00, 14:00, 18
 | **Restore the latest backup**        | `./restore.sh`                                                       | Download and restore the most recent backup from Google Drive           |
 | **Restore a specific backup**        | `./restore.sh <filename>`                                            | Restore a specific `.tar.xz` or `.zip` backup file                      |
 | **Install / update systemd timer**   | `./install-systemd.sh`                                               | Dynamically render & enable user systemd timer units                    |
+| **Uninstall systemd timer**          | `./uninstall.sh`                                                     | Stop and remove systemd timer and service units                         |
 | **Test systemd service immediately** | `systemctl --user start hermes-cloud-backup.service`                 | Trigger the systemd service manually                                    |
 | **View recent backup log**           | `tail -n 100 logs/backup.log`                                        | View log output of `backup.sh`                                          |
 | **Debug systemd timer failures**     | `journalctl --user -u hermes-cloud-backup.service -n 100 --no-pager` | View systemd service journal logs                                       |

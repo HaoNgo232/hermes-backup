@@ -56,6 +56,21 @@ log_raw() {
     fi
 }
 
+rotate_log_file() {
+    local max_lines="${MAX_LOG_LINES:-5000}"
+    local keep_lines="${KEEP_LOG_LINES:-2000}"
+    if [ -f "${LOG_FILE:-}" ]; then
+        local current_lines
+        current_lines=$(wc -l < "${LOG_FILE}" 2>/dev/null || echo 0)
+        if [ "${current_lines}" -gt "${max_lines}" ]; then
+            local tmp_log="${LOG_FILE}.tmp"
+            echo "$(date '+%Y-%m-%d %H:%M:%S') - [INFO] Log file exceeded ${max_lines} lines (${current_lines} lines). Truncating to last ${keep_lines} lines." > "${tmp_log}"
+            tail -n "${keep_lines}" "${LOG_FILE}" >> "${tmp_log}"
+            mv "${tmp_log}" "${LOG_FILE}"
+        fi
+    fi
+}
+
 log_info() {
     log_raw "${C_BLUE}${ICON_INFO}${C_RESET} $*"
 }
@@ -288,6 +303,7 @@ cleanup_gfs() {
 # =====================================================================
 # MAIN EXECUTION
 # =====================================================================
+rotate_log_file
 log_step "[1/4] Preflight checks & acquiring lock..."
 preflight_backup
 acquire_lock
