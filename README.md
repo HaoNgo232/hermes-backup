@@ -41,26 +41,26 @@ cd ~/hermes-backup
 ./backup.sh
 ```
 
-**Schedule**: Backups run automatically **every 4 hours** (02:00, 06:00, 10:00, 14:00, 18:00, 22:00) producing 6 backups per day. On first run, `./backup.sh` automatically installs the Systemd Timer.
+**Schedule**: Backups run **every 4 hours** (02:00, 06:00, 10:00, 14:00, 18:00, 22:00) producing 6 backups per day.
 
 **Automatic Retention & Cleanup Rules**:
-After every backup, old files on Google Drive are automatically cleaned up based on file age:
+After every backup, old files on Google Drive are cleaned up based on file age:
 
-| File Age | Cleanup Rule | Stored Files Count |
-| -------- | ------------ | ------------------ |
-| **0 to 2 days old** (last 48 hours) | Keep **ALL** backups | ~12 zip files |
-| **3 to 7 days old** (days 3–7) | Keep **1 backup per day** (removes other 5 daily backups) | ~5 zip files |
-| **8 to 28 days old** (weeks 2–4) | Keep **1 backup per week** (removes other backups of the week) | ~3 zip files |
-| **29 to 90 days old** (months 2–3) | Keep **1 backup per month** (removes other backups of the month) | ~2 zip files |
-| **Older than 90 days** (> 3 months) | **Permanently deleted** | 0 zip files |
+| File Age                            | Cleanup Rule                                                     | Stored Files Count |
+| ----------------------------------- | ---------------------------------------------------------------- | ------------------ |
+| **0 to 2 days old** (last 48 hours) | Keep **ALL** backups                                             | ~12 files          |
+| **3 to 7 days old** (days 3–7)      | Keep **1 backup per day** (removes other 5 daily backups)        | ~5 files           |
+| **8 to 28 days old** (weeks 2–4)    | Keep **1 backup per week** (removes other backups of the week)   | ~3 files           |
+| **29 to 90 days old** (months 2–3)  | Keep **1 backup per month** (removes other backups of the month) | ~2 files           |
+| **Older than 90 days** (> 3 months) | **Permanently deleted**                                          | 0 files            |
 
-👉 **Total stored files on Google Drive**: Always maintained at **~22 zip files** (~1.1 GB total storage).
+👉 **Total stored files on Google Drive**: Always maintained at **~22 files** (~700 MB total storage with xz compression).
 
 ---
 
 ## 2. Restore Data
 
-Run one command to automatically download and import the latest backup:
+Run one command to download and import the latest backup:
 
 ```bash
 cd ~/hermes-backup
@@ -84,4 +84,3 @@ tail -f logs/restore.log
 ## License
 
 [MIT](LICENSE)
-
