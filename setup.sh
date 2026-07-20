@@ -30,20 +30,30 @@ fi
 
 state_load
 
-INPUT_REMOTE="${BACKUP_REMOTE:-$(state_get "BASE_REMOTE" "gdrive-hermes:")}"
-REMOTE_NAME="$(rclone_get_remote_name "${INPUT_REMOTE}")"
-if [ -z "${REMOTE_NAME}" ]; then
-    REMOTE_NAME="gdrive-hermes"
-fi
-BASE_REMOTE_ONLY="${REMOTE_NAME}:"
+INPUT_REMOTE="${BACKUP_REMOTE:-gdrive-hermes:}"
+parsed_input="$(rclone_parse_remote_and_path "${INPUT_REMOTE}")"
+BASE_REMOTE_ONLY="${parsed_input%%|*}"
+INPUT_PATH="${parsed_input#*|}"
 
-# Extract path from input remote if provided
+if [ -z "${BASE_REMOTE_ONLY}" ]; then
+    BASE_REMOTE_ONLY="gdrive-hermes:"
+fi
+
+# Detect existing state base remote and prevent silent mutation
+EXISTING_BASE="$(state_get "BASE_REMOTE" "")"
+if [ -n "${EXISTING_BASE}" ] && [ -f "${APP_STATE_FILE}" ]; then
+    local_exist_norm="${EXISTING_BASE%%:*}"
+    input_norm="${BASE_REMOTE_ONLY%%:*}"
+    if [ "${local_exist_norm}" != "${input_norm}" ]; then
+        echo -e "${BADGE_ERR} ${C_RED}[ERR] Base remote in state.env is '${EXISTING_BASE}', but BACKUP_REMOTE is '${BASE_REMOTE_ONLY}'.${C_RESET}" >&2
+        echo -e "${C_RED}[ERR] Silent mutation prohibited: changing base remote requires manual repair or future maintenance command.${C_RESET}" >&2
+        exit 1
+    fi
+fi
+
 BASE_PATH_ONLY="$(state_get "BASE_PATH" "")"
 if [ -z "${BASE_PATH_ONLY}" ]; then
-    if [[ "${INPUT_REMOTE}" == *":"* ]]; then
-        BASE_PATH_ONLY="${INPUT_REMOTE#*:}"
-        BASE_PATH_ONLY="${BASE_PATH_ONLY#/}"
-    fi
+    BASE_PATH_ONLY="${INPUT_PATH}"
     [ -z "${BASE_PATH_ONLY}" ] && BASE_PATH_ONLY="HermesBackups"
 fi
 
@@ -97,6 +107,7 @@ fi
 echo ""
 echo -e "${C_BOLD}[2/${TOTAL_STEPS}] Checking base cloud remote connectivity...${C_RESET}"
 
+REMOTE_NAME="${BASE_REMOTE_ONLY%%:*}"
 if ! rclone_has_remote "${REMOTE_NAME}"; then
     echo "" >&2
     echo -e "${C_RED}${C_BOLD}ERROR: rclone remote '${REMOTE_NAME}:' is not configured.${C_RESET}" >&2
@@ -122,7 +133,7 @@ echo -e "${C_BOLD}[3/${TOTAL_STEPS}] Configuring client-side encryption...${C_RE
 
 if encryption_is_enabled; then
     CRYPT_REMOTE_CUR="$(state_get "CRYPT_REMOTE")"
-    EXPECTED_BASE="${BASE_REMOTE_ONLY}${BASE_PATH_ONLY}"
+    EXPECTED_BASE="${BASE_REMOTE_ONLY%/:}/${BASE_PATH_ONLY}"
     if encryption_validate_crypt_remote "${CRYPT_REMOTE_CUR}" "${EXPECTED_BASE}"; then
         echo -e "  ${BADGE_OK} Client-side encryption is already configured."
         echo -e "  ${BADGE_OK} Existing crypt remote '${CRYPT_REMOTE_CUR}' was retained."
@@ -154,7 +165,6 @@ else
             fi
 
             if encryption_display_recovery_screen_and_confirm "${GEN_CRYPT_PASSWORD}" "${GEN_CRYPT_SALT}"; then
-                # Write state in ONE atomic batch transaction (prevents transient invalid state)
                 state_set_many \
                     "ENCRYPTION_ENABLED" "true" \
                     "ENCRYPTION_MODE" "rclone-crypt" \
@@ -176,7 +186,6 @@ else
         fi
     else
         echo -e "  ${BADGE_OK} Client-side encryption: DISABLED (Plaintext cloud backup mode)"
-        # Preserve existing base remote/path configuration without silent mutation
         state_set_many \
             "ENCRYPTION_ENABLED" "false" \
             "ENCRYPTION_MODE" "none" \

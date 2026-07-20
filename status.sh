@@ -31,36 +31,37 @@ IS_REACHABLE_RAW=false
 ENCRYPTION_STATUS_OK=true
 ENC_MODE_TEXT="DISABLED"
 ENC_REASON_TEXT=""
-
-if encryption_is_enabled; then
-    CRYPT_REMOTE_CUR="$(state_get "CRYPT_REMOTE")"
-    BASE_REMOTE_CUR="$(state_get "BASE_REMOTE")"
-    BASE_PATH_CUR="$(state_get "BASE_PATH" "HermesBackupsEncrypted")"
-    EXPECTED_BASE="${BASE_REMOTE_CUR%/:}/${BASE_PATH_CUR}"
-
-    if encryption_validate_crypt_remote "${CRYPT_REMOTE_CUR}" "${EXPECTED_BASE}"; then
-        ENC_MODE_TEXT="ENABLED"
-        ACTIVE_REMOTE="${CRYPT_REMOTE_CUR}"
-        ACTIVE_PATH="$(state_get "CRYPT_PATH" "")"
-    else
-        ENC_MODE_TEXT="ERROR"
-        ENCRYPTION_STATUS_OK=false
-        ENC_REASON_TEXT="configured crypt remote '${CRYPT_REMOTE_CUR}' is unavailable, invalid, or inconsistent."
-        ACTIVE_REMOTE="${CRYPT_REMOTE_CUR}"
-        ACTIVE_PATH=""
-    fi
-else
-    ENC_MODE_TEXT="DISABLED"
-    BASE_REMOTE_CUR="$(state_get "BASE_REMOTE" "${BACKUP_REMOTE:-gdrive-hermes:}")"
-    BASE_PATH_CUR="$(state_get "BASE_PATH" "HermesBackups")"
-    ACTIVE_REMOTE="${BASE_REMOTE_CUR}"
-    ACTIVE_PATH="${BASE_PATH_CUR}"
-fi
-
-ACTIVE_ENDPOINT="$(rclone_compose_endpoint "${ACTIVE_REMOTE}" "${ACTIVE_PATH}")"
+ACTIVE_ENDPOINT=""
 
 if command -v rclone &>/dev/null; then
     RCLONE_OK=true
+    if encryption_is_enabled; then
+        CRYPT_REMOTE_CUR="$(state_get "CRYPT_REMOTE")"
+        BASE_REMOTE_CUR="$(state_get "BASE_REMOTE")"
+        BASE_PATH_CUR="$(state_get "BASE_PATH" "HermesBackupsEncrypted")"
+        EXPECTED_BASE="$(rclone_normalize_base_endpoint "${BASE_REMOTE_CUR}" "${BASE_PATH_CUR}")"
+
+        if encryption_validate_crypt_remote "${CRYPT_REMOTE_CUR}" "${EXPECTED_BASE}"; then
+            ENC_MODE_TEXT="ENABLED"
+            ACTIVE_REMOTE="${CRYPT_REMOTE_CUR}"
+            ACTIVE_PATH="$(state_get "CRYPT_PATH" "")"
+        else
+            ENC_MODE_TEXT="ERROR"
+            ENCRYPTION_STATUS_OK=false
+            ENC_REASON_TEXT="configured crypt remote '${CRYPT_REMOTE_CUR}' is unavailable, invalid, or inconsistent."
+            ACTIVE_REMOTE="${CRYPT_REMOTE_CUR}"
+            ACTIVE_PATH=""
+        fi
+    else
+        ENC_MODE_TEXT="DISABLED"
+        BASE_REMOTE_CUR="$(state_get "BASE_REMOTE" "${BACKUP_REMOTE:-gdrive-hermes:}")"
+        BASE_PATH_CUR="$(state_get "BASE_PATH" "HermesBackups")"
+        ACTIVE_REMOTE="${BASE_REMOTE_CUR}"
+        ACTIVE_PATH="${BASE_PATH_CUR}"
+    fi
+
+    ACTIVE_ENDPOINT="$(rclone_compose_endpoint "${ACTIVE_REMOTE}" "${ACTIVE_PATH}")"
+
     if [ "${ENCRYPTION_STATUS_OK}" = true ]; then
         reach_status="$(rclone_check_reachability "${ACTIVE_REMOTE}" "${ACTIVE_PATH}" 2>/dev/null || echo "FAILED")"
         if [ "${reach_status}" = "EXISTS" ]; then
@@ -80,6 +81,13 @@ if command -v rclone &>/dev/null; then
 else
     REMOTE_REACHABLE_TEXT="${BADGE_ERR} no (rclone command missing)"
     IS_REACHABLE_RAW=false
+    if encryption_is_enabled; then
+        ENC_MODE_TEXT="ENABLED"
+        ACTIVE_ENDPOINT="$(state_get "CRYPT_REMOTE")"
+    else
+        ENC_MODE_TEXT="DISABLED"
+        ACTIVE_ENDPOINT="$(state_get "BASE_REMOTE" "gdrive-hermes:")"
+    fi
 fi
 
 # Pre-fetch latest backup if reachable

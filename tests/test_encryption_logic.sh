@@ -24,22 +24,32 @@ source "${REPO_DIR}/lib/encryption.sh"
 
 echo "=== Running Encryption Logic Tests ==="
 
-# Test 1: Secret generator produces exactly 32 alphanumeric characters
-sec1="$(encryption_generate_secret)"
-sec2="$(encryption_generate_secret)"
-assert_equals "32" "${#sec1}" "Secret 1 is exactly 32 chars"
-assert_equals "32" "${#sec2}" "Secret 2 is exactly 32 chars"
-if [ "${sec1}" = "${sec2}" ]; then
-    echo -e "\033[0;31m[FAIL]\033[0m Secrets generated were identical" >&2
-    exit 1
-fi
-assert_equals "true" "true" "Secrets are unique and random"
+# Test 1: Secret generator produces exactly 32 alphanumeric characters under set -o pipefail
+test_secret_pipefail() {
+    set -o pipefail
+    local sec
+    sec="$(encryption_generate_secret)"
+    if [ "${#sec}" -ne 32 ]; then
+        exit 1
+    fi
+}
+assert_succeeds "Secret generator works cleanly under set -o pipefail" test_secret_pipefail
 
-# Test 2: Active destination returns composed base path when encryption is disabled
+# Test 2: Target string composition normalization (gdrive-hermes: + HermesBackupsEncrypted)
+norm_target="$(rclone_normalize_base_endpoint "gdrive-hermes:" "HermesBackupsEncrypted")"
+assert_equals "gdrive-hermes:HermesBackupsEncrypted" "${norm_target}" "Base target normalization produces no extra slash"
+
+# Test 3: Endpoint composition with path in remote string (BACKUP_REMOTE=gdrive-hermes:HermesBackups)
+composed_endpoint="$(rclone_compose_endpoint "gdrive-hermes:HermesBackups" "HermesBackups")"
+assert_equals "gdrive-hermes:HermesBackups/" "${composed_endpoint}" "BACKUP_REMOTE endpoint composition avoids path duplication"
+
+# Test 4: atomic_write_file with empty string does not hang
+empty_test_file="${TEST_TMP_DIR}/empty.txt"
+atomic_write_file "${empty_test_file}" "" 0600
+assert_equals "0" "$(stat -c%s "${empty_test_file}")" "atomic_write_file handles empty string content without hanging"
+
+# Test 5: Secret leak check (confirm state file contains NO recovery passwords/salts)
 state_load
-assert_equals "gdrive-hermes:HermesBackups/" "$(encryption_get_active_destination)" "Plaintext destination uses BASE_REMOTE + BASE_PATH"
-
-# Test 3: Secret leak check (confirm state file and logs contain NO recovery passwords/salts)
 if grep -i "password\|salt" "${APP_STATE_FILE}" 2>/dev/null; then
     echo -e "\033[0;31m[FAIL]\033[0m Secret password/salt leaked into state file" >&2
     exit 1

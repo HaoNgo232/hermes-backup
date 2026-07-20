@@ -13,6 +13,12 @@ rclone_require() {
     require_command rclone
 }
 
+# Redact potentially sensitive tokens/passwords from output logs
+rclone_sanitize_output() {
+    local text="$1"
+    echo "${text}" | sed -E 's/pass(word)?2? = [^ ]*/password = [REDACTED]/gi; s/token = [^ ]*/token = [REDACTED]/gi'
+}
+
 rclone_normalize_remote() {
     local remote="$1"
     case "${remote}" in
@@ -32,6 +38,40 @@ rclone_get_remote_name() {
     fi
 }
 
+rclone_parse_remote_and_path() {
+    local input_str="$1"
+    local name
+    name="$(rclone_get_remote_name "${input_str}")"
+
+    if [ -n "${name}" ]; then
+        local remote_part="${name}:"
+        local path_part="${input_str#*:}"
+        path_part="${path_part#/}"
+        echo "${remote_part}|${path_part}"
+    else
+        echo "|${input_str}"
+    fi
+}
+
+rclone_normalize_base_endpoint() {
+    local remote="$1"
+    local path="${2:-}"
+
+    local name
+    name="$(rclone_get_remote_name "${remote}")"
+    if [ -n "${name}" ]; then
+        if [ -n "${path}" ]; then
+            path="${path#/}"
+            path="${path%/}"
+            echo "${name}:${path}"
+        else
+            echo "${name}:"
+        fi
+    else
+        echo "${remote}"
+    fi
+}
+
 rclone_compose_endpoint() {
     local remote="$1"
     local path="${2:-}"
@@ -41,20 +81,30 @@ rclone_compose_endpoint() {
         return
     fi
 
-    local norm_remote
-    norm_remote="$(rclone_normalize_remote "${remote}")"
+    local parsed
+    parsed="$(rclone_parse_remote_and_path "${remote}")"
+    local base_remote_part="${parsed%%|*}"
+    local embedded_path="${parsed#*|}"
 
-    if [ -n "${path}" ]; then
-        # strip leading slash
-        path="${path#/}"
-        # ensure trailing slash if it's a directory path
-        case "${path}" in
+    local effective_remote="${base_remote_part}"
+    [ -z "${effective_remote}" ] && effective_remote="${remote}"
+
+    local effective_path="${path}"
+    if [ -z "${effective_path}" ]; then
+        effective_path="${embedded_path}"
+    fi
+
+    effective_remote="$(rclone_normalize_remote "${effective_remote}")"
+
+    if [ -n "${effective_path}" ]; then
+        effective_path="${effective_path#/}"
+        case "${effective_path}" in
             */) ;;
-            *)  path="${path}/" ;;
+            *)  effective_path="${effective_path}/" ;;
         esac
-        echo "${norm_remote}${path}"
+        echo "${effective_remote}${effective_path}"
     else
-        echo "${norm_remote}"
+        echo "${effective_remote}"
     fi
 }
 
@@ -75,12 +125,11 @@ rclone_check_remote_root() {
         return 0
     else
         log_error "Cannot connect to rclone remote '${remote_name}:'."
-        log_error "rclone output: ${out}"
+        log_error "rclone output: $(rclone_sanitize_output "${out}")"
         return 1
     fi
 }
 
-# Detailed reachability probe distinguishing root connectivity vs target folder existence
 rclone_check_reachability() {
     local remote_str="$1"
     local path_str="${2:-}"
@@ -101,12 +150,10 @@ rclone_check_reachability() {
         return 1
     fi
 
-    # Step 1: Probe root connectivity
     if ! rclone_check_remote_root "${remote_name}"; then
         return 1
     fi
 
-    # Step 2: Check target folder
     if rclone lsf "${full_endpoint}" --max-depth 0 &>/dev/null; then
         echo "EXISTS"
         return 0
@@ -116,7 +163,6 @@ rclone_check_reachability() {
     fi
 }
 
-# Writable probe for setup preflight check
 rclone_check_writable_probe() {
     local endpoint="$1"
     rclone_require
@@ -152,7 +198,7 @@ rclone_copy_file() {
     local out
     if ! out="$(rclone copyto "${src_file}" "${dest_remote_path}" 2>&1)"; then
         log_error "rclone copyto failed from '${src_file}' to '${dest_remote_path}'."
-        log_error "rclone output: ${out}"
+        log_error "rclone output: $(rclone_sanitize_output "${out}")"
         return 1
     fi
     return 0
@@ -166,7 +212,7 @@ rclone_fetch_file() {
     local out
     if ! out="$(rclone copyto "${src_remote_path}" "${dest_local_file}" 2>&1)"; then
         log_error "rclone copyto download failed for '${src_remote_path}'."
-        log_error "rclone output: ${out}"
+        log_error "rclone output: $(rclone_sanitize_output "${out}")"
         return 1
     fi
     return 0
@@ -188,7 +234,6 @@ rclone_verify_object() {
     return 1
 }
 
-# Lists backups in format: ModTime;Path;Size
 rclone_list_backups() {
     local remote_path="$1"
     rclone_require

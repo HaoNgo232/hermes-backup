@@ -11,11 +11,25 @@ SCRIPT_DIR="$(cd "${COMMON_LIB_DIR}/.." && pwd)"
 APP_CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/hermes-backup"
 APP_STATE_FILE="${APP_CONFIG_DIR}/state.env"
 
+verify_permissions() {
+    local target="$1"
+    local expected="$2"
+    expected="${expected#0}" # Normalize leading 0 (e.g. 0600 -> 600)
+    local actual
+    actual="$(stat -c "%a" "${target}" 2>/dev/null || stat -f "%Lp" "${target}" 2>/dev/null || echo "")"
+    actual="${actual#0}"
+    if [ "${actual}" != "${expected}" ]; then
+        log_error "Permission enforcement failed on '${target}': expected permissions ${expected}, got '${actual}'."
+        return 1
+    fi
+    return 0
+}
+
 # Ensure config directory exists with 0700 permissions
 mkdir -p "${APP_CONFIG_DIR}"
 chmod 0700 "${APP_CONFIG_DIR}" 2>/dev/null || true
+verify_permissions "${APP_CONFIG_DIR}" "700" || true
 
-# Logging setup (LOG_FILE can be set by top-level scripts; default empty for non-logging CLI tools)
 LOG_DIR="${SCRIPT_DIR}/logs"
 LOG_FILE="${LOG_FILE:-}"
 
@@ -133,10 +147,9 @@ check_cmd() {
     fi
 }
 
-# Atomic file write helper
+# Atomic file write helper (Fixed: printf "%s" without trailing newline and leading 0 permission normalization)
 atomic_write_file() {
     local target_file="$1"
-    local content="${2:-}"
     local mode="${3:-0600}"
 
     local parent_dir
@@ -146,16 +159,17 @@ atomic_write_file() {
 
     local tmp_file
     tmp_file="$(mktemp "${parent_dir}/tmp.XXXXXX")"
-    chmod "${mode}" "${tmp_file}" 2>/dev/null || true
 
-    if [ $# -ge 2 ] && [ -n "${content}" ]; then
-        printf "%s\n" "${content}" > "${tmp_file}"
+    if [ $# -ge 2 ]; then
+        printf "%s" "${2:-}" > "${tmp_file}"
     else
         cat > "${tmp_file}"
     fi
 
     chmod "${mode}" "${tmp_file}" 2>/dev/null || true
+    verify_permissions "${tmp_file}" "${mode}" || true
     mv -f "${tmp_file}" "${target_file}"
+    verify_permissions "${target_file}" "${mode}" || true
 }
 
 is_boolean() {

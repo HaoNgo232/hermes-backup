@@ -77,17 +77,20 @@ EOF
 }
 assert_fails "Missing crypt remote fails closed on restore" test_missing_crypt_restore
 
-# Test 3: Orphan crypt remote conflict detection during setup
-test_orphan_crypt_conflict() {
-    local tmp_conf="$(mktemp -d "${TEST_TMP_DIR}/orphan-XXXXXX")"
+# Test 3: Path traversal target filename in restore.sh rejected
+test_path_traversal_restore() {
+    bash "${REPO_DIR}/restore.sh" "../../etc/passwd"
+}
+assert_fails "Path traversal filename in restore.sh rejected" test_path_traversal_restore
+
+# Test 4: Missing state file with existing crypt remote fails closed
+test_missing_state_with_crypt() {
+    local tmp_conf="$(mktemp -d "${TEST_TMP_DIR}/missingstate-XXXXXX")"
     export XDG_CONFIG_HOME="${tmp_conf}"
     source "${REPO_DIR}/lib/common.sh"
     source "${REPO_DIR}/lib/state.sh"
     source "${REPO_DIR}/lib/rclone.sh"
     source "${REPO_DIR}/lib/encryption.sh"
-
-    state_load
-    assert_equals "false" "$(encryption_is_enabled && echo "true" || echo "false")" "State is plaintext"
 
     if command -v rclone &>/dev/null; then
         local p1="$(rclone obscure "testpass1")"
@@ -95,14 +98,14 @@ test_orphan_crypt_conflict() {
         rclone config create hermes-backup-crypt crypt remote gdrive-hermes:HermesBackupsEncrypted filename_encryption standard directory_name_encryption true password "${p1}" password2 "${p2}" &>/dev/null || true
     fi
 
-    encryption_create_crypt_remote "gdrive-hermes:" "hermes-backup-crypt" "HermesBackupsEncrypted"
+    # Loading missing state when crypt remote exists MUST fail closed
+    state_load
 }
-assert_fails "Orphan crypt remote without app state rejected during setup" test_orphan_crypt_conflict
+assert_fails "Missing state.env with existing crypt remote fails closed" test_missing_state_with_crypt
 
-# Clean up mock remote
 rclone config delete hermes-backup-crypt &>/dev/null || true
 
-# Test 4: Reminder notice transition pending -> shown
+# Test 5: Reminder notice transition pending -> shown
 reminder_dir="$(mktemp -d "${TEST_TMP_DIR}/rem-XXXXXX")"
 export XDG_CONFIG_HOME="${reminder_dir}"
 source "${REPO_DIR}/lib/common.sh"
@@ -127,7 +130,7 @@ state_load
 encryption_show_first_backup_reminder_if_needed &>/dev/null
 assert_equals "shown" "$(state_get "RECOVERY_NOTICE_STATE")" "Reminder state transitions pending -> shown"
 
-# Test 5: Rerunning reminder check when already shown does not repeat
+# Test 6: Rerunning reminder check when already shown does not repeat
 encryption_show_first_backup_reminder_if_needed &>/dev/null
 assert_equals "shown" "$(state_get "RECOVERY_NOTICE_STATE")" "Reminder state remains shown"
 

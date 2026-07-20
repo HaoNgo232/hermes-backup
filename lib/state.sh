@@ -16,6 +16,7 @@ STATE_LOADED=false
 state_ensure_dir() {
     mkdir -p "${APP_CONFIG_DIR}"
     chmod 0700 "${APP_CONFIG_DIR}" 2>/dev/null || true
+    verify_permissions "${APP_CONFIG_DIR}" "700" || true
 }
 
 state_init_defaults() {
@@ -35,10 +36,9 @@ state_load() {
     state_init_defaults
 
     if [ -f "${APP_STATE_FILE}" ]; then
-        chmod 0600 "${APP_STATE_FILE}" 2>/dev/null || true
+        verify_permissions "${APP_STATE_FILE}" "600" || true
         local line_count=0
         while IFS='=' read -r key value || [ -n "${key}" ]; do
-            # Skip comments and empty lines
             [[ "${key}" =~ ^[[:space:]]*# ]] && continue
             [[ -z "${key}" ]] && continue
             
@@ -54,6 +54,16 @@ state_load() {
         if [ "${line_count}" -eq 0 ]; then
             log_error "State file '${APP_STATE_FILE}' exists but is empty or corrupted."
             exit 1
+        fi
+    else
+        # Spec invariant check: Never assume missing state file means encryption can be safely disabled if crypt remote exists
+        if command -v rclone &>/dev/null; then
+            if rclone listremotes 2>/dev/null | grep -i -q "^hermes-backup-crypt:"; then
+                log_error "[ERR] Application state file '${APP_STATE_FILE}' is missing, but crypt remote 'hermes-backup-crypt:' was found in rclone config."
+                log_error "[ERR] Process stopped to prevent an unencrypted plaintext cloud upload."
+                log_info "[INFO] Please run ./setup.sh to restore or re-initialize application state."
+                exit 1
+            fi
         fi
     fi
 
@@ -89,7 +99,6 @@ state_validate() {
         exit 1
     fi
 
-    # Encryption Enabled Consistency Checks (fail closed)
     if [ "${enc_enabled}" = "true" ]; then
         if [ "${enc_mode}" != "rclone-crypt" ]; then
             log_error "[ERR] Encryption state is inconsistent: ENCRYPTION_ENABLED is true but ENCRYPTION_MODE is '${enc_mode}'."
@@ -106,7 +115,6 @@ state_validate() {
             exit 1
         fi
     else
-        # Encryption Disabled Consistency Checks
         if [ "${enc_mode}" != "none" ]; then
             log_error "[ERR] Invalid state file: ENCRYPTION_ENABLED is false but ENCRYPTION_MODE is '${enc_mode}'."
             exit 1
@@ -137,7 +145,6 @@ state_set() {
     state_save
 }
 
-# Atomic batch state update (prevents transient invalid state during multi-field updates)
 state_set_many() {
     if [ "${STATE_LOADED}" = false ]; then
         state_load

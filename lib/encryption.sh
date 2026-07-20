@@ -91,14 +91,21 @@ encryption_validate_crypt_remote() {
     return 0
 }
 
-# Reliable 32-character random secret generator with urandom fallback loop
+# Reliable 32-character random secret generator (No SIGPIPE under set -o pipefail)
 encryption_generate_secret() {
+    local raw=""
     if command -v openssl &>/dev/null; then
-        openssl rand -base64 48 | tr -dc 'a-zA-Z0-9' | head -c 32
+        raw="$(openssl rand -hex 32 2>/dev/null || true)"
     else
-        local sec=""
+        raw="$(head -c 128 /dev/urandom 2>/dev/null | tr -dc 'a-zA-Z0-9' || true)"
+    fi
+
+    if [ "${#raw}" -ge 32 ]; then
+        echo "${raw:0:32}"
+    else
+        local sec="${raw}"
         while [ "${#sec}" -lt 32 ]; do
-            sec+=$(head -c 128 /dev/urandom | tr -dc 'a-zA-Z0-9' || true)
+            sec+=$(head -c 64 /dev/urandom 2>/dev/null | tr -dc 'a-zA-Z0-9' || true)
         done
         echo "${sec:0:32}"
     fi
@@ -275,12 +282,10 @@ This reminder is shown only once.
             echo "${reminder_msg}" >> "${LOG_FILE}"
         fi
 
-        # Atomically update reminder state
         state_set "RECOVERY_NOTICE_STATE" "shown"
     fi
 }
 
-# Resolve active endpoint with distinct Operation context ("backup" vs "restore")
 encryption_get_active_endpoint() {
     local op="${1:-backup}"
     state_load
@@ -295,7 +300,8 @@ encryption_get_active_endpoint() {
         local base_path
         base_path="$(state_get "BASE_PATH" "${DEFAULT_CRYPT_FOLDER}")"
 
-        local expected_base_target="${base_remote%/:}/${base_path}"
+        local expected_base_target
+        expected_base_target="$(rclone_normalize_base_endpoint "${base_remote}" "${base_path}")"
 
         if [ -z "${crypt_remote}" ] || ! encryption_validate_crypt_remote "${crypt_remote}" "${expected_base_target}"; then
             if [ "${op}" = "restore" ]; then
@@ -308,12 +314,15 @@ encryption_get_active_endpoint() {
             fi
             exit 1
         fi
+        log_info "Encryption mode: ENABLED (rclone crypt)"
+        log_info "Validated crypt remote endpoint: ${crypt_remote}${crypt_path}"
         rclone_compose_endpoint "${crypt_remote}" "${crypt_path}"
     else
         local base_remote
         base_remote="$(state_get "BASE_REMOTE" "${BACKUP_REMOTE:-gdrive-hermes:}")"
         local base_path
         base_path="$(state_get "BASE_PATH" "HermesBackups")"
+        log_info "Encryption mode: DISABLED (Plaintext cloud upload)"
         rclone_compose_endpoint "${base_remote}" "${base_path}"
     fi
 }

@@ -34,11 +34,9 @@ if [ -z "${HERMES_RESOLVED}" ]; then
 fi
 log_info "Using Hermes binary: ${HERMES_RESOLVED}"
 
-# Resolve active source (Plaintext vs Crypt Remote)
 SOURCE="$(encryption_get_active_source)"
 log_info "Resolved active restore source: ${SOURCE}"
 
-# Workspace setup
 WORKSPACE="$(mktemp -d "${TMPDIR:-/tmp}/hermes-restore-XXXXXX")"
 cleanup() {
     if [ -n "${WORKSPACE}" ] && [ -d "${WORKSPACE}" ]; then
@@ -49,7 +47,15 @@ trap cleanup EXIT
 
 TARGET_FILE="${1:-}"
 
-if [ -z "${TARGET_FILE}" ]; then
+if [ -n "${TARGET_FILE}" ]; then
+    # Security check: Prevent path traversal in target filename parameter
+    base_target="$(basename "${TARGET_FILE}")"
+    if [ "${base_target}" != "${TARGET_FILE}" ] || [[ "${TARGET_FILE}" == *".."* ]] || [[ "${TARGET_FILE}" == *"/"* ]]; then
+        log_error "Invalid or unsafe backup filename '${TARGET_FILE}'. Target must be a simple filename without path traversal."
+        exit 1
+    fi
+    log_info "Target backup specified manually: ${TARGET_FILE}"
+else
     log_info "Querying active source (${SOURCE}) for the latest backup..."
 
     raw_list="$(rclone_list_backups "${SOURCE}")"
@@ -64,8 +70,6 @@ if [ -z "${TARGET_FILE}" ]; then
         exit 1
     fi
     log_success "Latest backup identified: ${TARGET_FILE}"
-else
-    log_info "Target backup specified manually: ${TARGET_FILE}"
 fi
 
 # ---------------------------------------------------------------------

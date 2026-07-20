@@ -78,23 +78,68 @@ Backups will run automatically **every 4 hours** (02:00, 06:00, 10:00, 14:00, 18
 
 ## Optional Client-Side Encryption
 
-Client-side encryption for cloud backups is optional and disabled by default.
+Client-side encryption is an **optional feature** that protects your cloud backups before they ever leave your server.
 
-1. **Backend:** Uses `rclone crypt` layered over your primary cloud remote (`gdrive-hermes:`).
-2. **Confidentiality:** Archives, raw file contents, and directory/filenames are encrypted locally before uploading to Google Drive.
-3. **Unattended Operation:** Normal automated backups (`./backup.sh`) and restores (`./restore.sh`) remain fully unattended using operational credentials stored in local `rclone.conf`.
-4. **Recovery Material:** Generated recovery password and recovery salt are displayed ONLY ONCE during interactive `./setup.sh`.
-5. **Secure Storage:** Users must save BOTH the recovery password and recovery salt in a password manager or offline secure storage independent from the VPS/computer and cloud storage account.
-6. **Do NOT Store Secrets in Cloud:** Never save recovery material in the same cloud storage folder or account as the backups.
-7. **Loss of Recovery Material:** If both the local machine/rclone configuration and the saved recovery material are lost, encrypted cloud backups CANNOT be recovered.
-8. **Cloud Management:** Do not rename or manipulate encrypted cloud files manually through the Google Drive UI.
-9. **Retention & Deletion:** Encryption protects data confidentiality; it does not protect against deletion of cloud backups. GFS retention schedule applies to encrypted backups.
+### What does it do?
 
-### Threat Model Notice
+- 🔒 **Complete Privacy:** Your backup data, folder structure, and filenames are encrypted locally on your server *before* being uploaded.
+- 🙈 **Zero-Knowledge Cloud Storage:** Google Drive (or anyone looking at your Google account) only sees random, unreadable scrambled files.
+- ⚡ **Hands-Free Automation:** Once set up, daily backups (`./backup.sh`) and restores (`./restore.sh`) continue to run automatically in the background without prompting you for a password every time.
 
-Encryption protects cloud backup confidentiality if an unauthorized entity accesses your cloud-storage files without having access to your local `rclone` crypt configuration or independently saved recovery material.
+---
 
-Encryption does not fully protect against compromise of the local VPS/user account that runs automatic backups, because that machine must maintain local `rclone` credentials to perform unattended backups.
+### How to Turn It On
+
+During `./setup.sh`, you will see this prompt:
+
+```text
+Enable client-side encryption for cloud backups? [y/N]:
+```
+
+- Type **`y`** to turn on encryption.
+- Press **Enter** (or `N`) if you want standard unencrypted backups.
+
+---
+
+### 🔑 Understanding Recovery Material (Important!)
+
+When you enable encryption, `./setup.sh` automatically generates two unique secret keys:
+
+1. **Recovery Password**
+2. **Recovery Salt**
+
+These two keys are displayed on your terminal **only once** during setup.
+
+```text
+======================================================================
+IMPORTANT: ENCRYPTED BACKUP RECOVERY MATERIAL
+======================================================================
+...
+Recovery password:
+  <generated-32-char-password>
+
+Recovery salt:
+  <generated-32-char-salt>
+...
+Type SAVED to confirm that you saved the recovery material:
+======================================================================
+```
+
+> [!IMPORTANT]
+> **Why do I need these keys?**  
+> If your server crashes or gets replaced, you will need these two keys to unlock your encrypted backups on a new machine.
+
+---
+
+### 🛡️ 3 Simple Rules for Encrypted Backups
+
+1. 🔐 **Save Both Keys Immediately:** Copy the `Recovery password` and `Recovery salt` into a password manager (like Bitwarden, 1Password) or an encrypted note.
+2. 🚫 **Never Save Keys in Google Drive:** Do not save your recovery keys in the same Google Drive account/folder as your backups. If you lose access to Google Drive, you lose both!
+3. 🤖 **Do Not Rename Files Manually:** In Google Drive, encrypted filenames will look like random strings (e.g. `a1b2c3d4...`). Do not rename or delete them directly in Google Drive interface. Let `backup.sh`, `restore.sh`, and `status.sh` manage them.
+
+> [!WARNING]
+> **No Key, No Restore!**  
+> If your server is wiped **AND** you lose your saved recovery keys, your encrypted cloud backups **cannot be decrypted by anyone** (including us or Google). Keep your recovery keys safe!
 
 ---
 
