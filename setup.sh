@@ -192,14 +192,26 @@ if [ "${RUN_TEST}" = true ]; then
     echo -e "Starting systemd backup service..."
     systemctl --user start hermes-cloud-backup.service
 
-    echo -e "Waiting for backup service completion..."
+    TIMEOUT_SEC="${TEST_TIMEOUT_SECONDS:-900}"
+    MAX_POLLS=$(( TIMEOUT_SEC / 2 ))
+    [ "${MAX_POLLS}" -lt 1 ] && MAX_POLLS=1
+
+    echo -e "Waiting for backup service completion (timeout: ${TIMEOUT_SEC}s)..."
     # Poll until service is inactive
-    for (( i=0; i<120; i++ )); do
+    for (( i=0; i<MAX_POLLS; i++ )); do
         if [ "$(systemctl --user is-active hermes-cloud-backup.service 2>/dev/null)" != "active" ]; then
             break
         fi
         sleep 2
     done
+
+    if [ "$(systemctl --user is-active hermes-cloud-backup.service 2>/dev/null)" = "active" ]; then
+        echo "" >&2
+        echo -e "${BADGE_ERR} ${C_RED}${C_BOLD}END-TO-END TEST TIMED OUT: Backup service is still running after ${TIMEOUT_SEC}s.${C_RESET}" >&2
+        echo "Check live service progress with:" >&2
+        echo -e "  ${C_CYAN}journalctl --user -u hermes-cloud-backup.service -f${C_RESET}" >&2
+        exit 1
+    fi
 
     if [ "$(systemctl --user is-failed hermes-cloud-backup.service 2>/dev/null)" = "failed" ]; then
         echo "" >&2
