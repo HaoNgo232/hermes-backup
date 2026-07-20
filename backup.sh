@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # =====================================================================
-# Hermes Backup Script
-# Automatically creates a backup with 'hermes backup' and uploads it to
-# Google Drive. The first run installs a Systemd Timer every four hours.
+# Hermes Backup Script (Super Compression tar.xz)
+# Automatically creates a backup with 'hermes backup', super-compresses
+# with xz (-9e), and uploads it to Google Drive.
+# The first run installs a Systemd Timer every four hours.
 # Old backups are removed according to GFS (Grandfather-Father-Son).
 # =====================================================================
 set -euo pipefail
@@ -23,7 +24,7 @@ REMOTE="${BACKUP_REMOTE:-gdrive-hermes:HermesBackups}"
 
 # Timestamp format: DD-MM-YYYY_HHhMMpSSs (example: 20-07-2026_14h47p55s)
 TIMESTAMP="$(date +%d-%m-%Y_%Hh%Mp%Ss)"
-ZIP_NAME="hermes-backup-${TIMESTAMP}.zip"
+ARCHIVE_NAME="hermes-backup-${TIMESTAMP}.tar.xz"
 
 case "${REMOTE}" in
     *:) ;;
@@ -31,10 +32,12 @@ case "${REMOTE}" in
     *) REMOTE="${REMOTE}/" ;;
 esac
 
-TMP_ZIP="/tmp/${ZIP_NAME}"
+TMP_ORIG="/tmp/hermes_orig_${TIMESTAMP}.zip"
+TMP_DIR="/tmp/hermes_extract_${TIMESTAMP}"
+TMP_XZ="/tmp/${ARCHIVE_NAME}"
 
 cleanup() {
-    rm -f "${TMP_ZIP}" 2>/dev/null || true
+    rm -rf "${TMP_ORIG}" "${TMP_DIR}" "${TMP_XZ}" 2>/dev/null || true
 }
 trap cleanup EXIT
 
@@ -128,7 +131,7 @@ cleanup_gfs() {
             deleted=$((deleted + 1))
         fi
     done < <(rclone lsf "${REMOTE}" --format "tp" --files-only 2>/dev/null \
-        | grep -E ';hermes-backup-.*\.zip$' | sort -r)
+        | grep -E ';hermes-backup-.*\.(tar\.xz|zip)$' | sort -r)
 
     log "GFS cleanup complete: kept ${kept} backups, deleted ${deleted} backups."
 }
@@ -140,19 +143,29 @@ cleanup_gfs() {
 # Step 0: Install the timer automatically if needed
 install_timer_if_needed
 
-# Step 1: Create the backup
+# Step 1: Create the base backup with Hermes
 log "Starting Hermes backup..."
-hermes backup -o "${TMP_ZIP}"
+hermes backup -o "${TMP_ORIG}"
 
-if [ ! -f "${TMP_ZIP}" ]; then
-    log "ERROR: Backup file was not found at ${TMP_ZIP}"
+if [ ! -f "${TMP_ORIG}" ]; then
+    log "ERROR: Backup file was not found at ${TMP_ORIG}"
     exit 1
 fi
 
-# Step 2: Upload to Google Drive
-log "Uploading ${ZIP_NAME} to Google Drive (${REMOTE})..."
-rclone copyto "${TMP_ZIP}" "${REMOTE}${ZIP_NAME}"
-log "Backup completed successfully. File: ${REMOTE}${ZIP_NAME}"
+# Step 2: Super-compress with xz -9e (-35% size reduction)
+log "Super-compressing backup to .tar.xz (level 9)..."
+mkdir -p "${TMP_DIR}"
+unzip -q -o "${TMP_ORIG}" -d "${TMP_DIR}"
+tar -cf - -C "${TMP_DIR}" . | xz -9e -c > "${TMP_XZ}"
 
-# Step 3: Remove old backups according to GFS
+orig_size=$(du -h "${TMP_ORIG}" | cut -f1)
+xz_size=$(du -h "${TMP_XZ}" | cut -f1)
+log "Super-compression complete: ${orig_size} -> ${xz_size}"
+
+# Step 3: Upload to Google Drive
+log "Uploading ${ARCHIVE_NAME} to Google Drive (${REMOTE})..."
+rclone copyto "${TMP_XZ}" "${REMOTE}${ARCHIVE_NAME}"
+log "Backup completed successfully. File: ${REMOTE}${ARCHIVE_NAME}"
+
+# Step 4: Remove old backups according to GFS
 cleanup_gfs
