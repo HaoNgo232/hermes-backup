@@ -211,6 +211,7 @@ if [ "${RUN_TEST}" = true ]; then
     TEST_START_EPOCH="$(date +%s)"
     echo -e "Starting systemd backup service (non-blocking)..."
     systemctl --user start --no-block hermes-cloud-backup.service
+    sleep 1
 
     MAX_POLLS=$(( TIMEOUT_SEC / 2 ))
     [ "${MAX_POLLS}" -lt 1 ] && MAX_POLLS=1
