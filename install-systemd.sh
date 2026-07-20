@@ -44,10 +44,21 @@ if [ ! -f "${SRC_DIR}/systemd/${SERVICE}" ] || [ ! -f "${SRC_DIR}/systemd/${TIME
     exit 1
 fi
 
-# Resolve Hermes binary absolute path
+state_load
+
+STORED_HERMES_HOME="$(state_get "HERMES_HOME" "")"
+STORED_HERMES_BIN="$(state_get "HERMES_BIN" "")"
+
 HERMES_RESOLVED=""
-if [ -n "${HERMES_BIN:-}" ] && [ -x "${HERMES_BIN}" ]; then
+
+if [ -n "${HERMES_BIN:-}" ]; then
+    if [ ! -x "${HERMES_BIN}" ]; then
+        echo -e "${C_RED}ERROR: Explicit HERMES_BIN environment variable ('${HERMES_BIN}') is not executable.${C_RESET}" >&2
+        exit 1
+    fi
     HERMES_RESOLVED="${HERMES_BIN}"
+elif [ -n "${STORED_HERMES_BIN}" ] && [ -x "${STORED_HERMES_BIN}" ]; then
+    HERMES_RESOLVED="${STORED_HERMES_BIN}"
 elif command -v hermes &>/dev/null; then
     HERMES_RESOLVED="$(command -v hermes)"
 fi
@@ -61,10 +72,23 @@ fi
 HERMES_DIR="$(dirname "${HERMES_RESOLVED}")"
 EXPLICIT_PATH="${HERMES_DIR}:${HOME}/.local/bin:/usr/local/bin:/usr/bin:/bin"
 
-if [[ "${SRC_DIR}" == *$'\n'* ]] || [[ "${HERMES_RESOLVED}" == *$'\n'* ]]; then
-    echo -e "${C_RED}ERROR: Path contains invalid characters (newline).${C_RESET}" >&2
+if [ -n "${HERMES_HOME:-}" ] && [ -n "${STORED_HERMES_HOME}" ] && [ "${HERMES_HOME}" != "${STORED_HERMES_HOME}" ]; then
+    echo -e "${C_RED}ERROR: HERMES_HOME environment variable ('${HERMES_HOME}') differs from stored state ('${STORED_HERMES_HOME}').${C_RESET}" >&2
+    echo "Normal setup/install will not silently change Hermes home." >&2
     exit 1
 fi
+
+EFFECTIVE_XDG_CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}"
+EFFECTIVE_HERMES_HOME="${HERMES_HOME:-${STORED_HERMES_HOME:-$HOME/.hermes}}"
+
+for checked_path in "${SRC_DIR}" "${HERMES_RESOLVED}" "${EFFECTIVE_XDG_CONFIG}" "${EFFECTIVE_HERMES_HOME}"; do
+    if [[ "${checked_path}" == *$'\n'* || "${checked_path}" == *$'\r'* ]]; then
+        echo -e "${C_RED}ERROR: Path contains invalid newline characters.${C_RESET}" >&2
+        exit 1
+    fi
+done
+
+state_set_many "HERMES_HOME" "${EFFECTIVE_HERMES_HOME}" "HERMES_BIN" "${HERMES_RESOLVED}"
 
 # ---------------------------------------------------------------------
 # RENDER AND INSTALL UNITS
@@ -72,26 +96,51 @@ fi
 mkdir -p "${UNIT_DIR}"
 
 escape_sed() {
-    printf '%s\n' "$1" | sed -e 's/[\/&]/\\&/g'
+    local val="$1"
+    val="${val//\\/\\\\}"
+    val="${val//\"/\\\"}"
+    val="${val//%/%%}"
+    printf '%s\n' "${val}" | sed -e 's/[\/&]/\\&/g'
 }
 
 REPO_DIR_ESC="$(escape_sed "${SRC_DIR}")"
 HERMES_BIN_ESC="$(escape_sed "${HERMES_RESOLVED}")"
 PATH_ESC="$(escape_sed "${EXPLICIT_PATH}")"
+XDG_CONFIG_ESC="$(escape_sed "${EFFECTIVE_XDG_CONFIG}")"
+HERMES_HOME_ESC="$(escape_sed "${EFFECTIVE_HERMES_HOME}")"
 
-# Render service unit atomically
 rendered_svc="$(sed -e "s/@REPO_DIR@/${REPO_DIR_ESC}/g" \
     -e "s/@HERMES_BIN@/${HERMES_BIN_ESC}/g" \
+    -e "s/@HERMES_HOME@/${HERMES_HOME_ESC}/g" \
     -e "s/@PATH@/${PATH_ESC}/g" \
+    -e "s/@XDG_CONFIG_HOME@/${XDG_CONFIG_ESC}/g" \
     "${SRC_DIR}/systemd/${SERVICE}")"
 atomic_write_file "${UNIT_DIR}/${SERVICE}" "${rendered_svc}" 0644
 
-# Render timer unit atomically
 rendered_timer="$(sed -e "s/@REPO_DIR@/${REPO_DIR_ESC}/g" "${SRC_DIR}/systemd/${TIMER}")"
 atomic_write_file "${UNIT_DIR}/${TIMER}" "${rendered_timer}" 0644
 
 echo -e "  ${BADGE_OK} Installed service: ${UNIT_DIR}/${SERVICE}"
 echo -e "  ${BADGE_OK} Installed timer:   ${UNIT_DIR}/${TIMER}"
+
+# Verify secret-like values are NOT present in generated unit file
+if grep -Eqi 'password2?|recovery|refresh_token|access_token|client_secret' "${UNIT_DIR}/${SERVICE}"; then
+    echo -e "${C_RED}ERROR: Secret-like values detected in rendered service unit!${C_RESET}" >&2
+    rm -f "${UNIT_DIR}/${SERVICE}" "${UNIT_DIR}/${TIMER}" 2>/dev/null || true
+    exit 1
+fi
+
+if command -v systemd-analyze &>/dev/null; then
+    if systemd-analyze --user verify "${UNIT_DIR}/${SERVICE}" "${UNIT_DIR}/${TIMER}" &>/dev/null; then
+        :
+    elif systemd-analyze verify "${UNIT_DIR}/${SERVICE}" "${UNIT_DIR}/${TIMER}" &>/dev/null; then
+        :
+    else
+        echo -e "${C_RED}ERROR: Rendered systemd unit failed verification.${C_RESET}" >&2
+        rm -f "${UNIT_DIR}/${SERVICE}" "${UNIT_DIR}/${TIMER}" 2>/dev/null || true
+        exit 1
+    fi
+fi
 
 # ---------------------------------------------------------------------
 # DAEMON RELOAD AND ACTIVATE
@@ -99,9 +148,6 @@ echo -e "  ${BADGE_OK} Installed timer:   ${UNIT_DIR}/${TIMER}"
 systemctl --user daemon-reload
 systemctl --user enable --now "${TIMER}"
 
-# ---------------------------------------------------------------------
-# VERIFICATION & STATUS
-# ---------------------------------------------------------------------
 IS_ENABLED="$(systemctl --user is-enabled "${TIMER}" 2>/dev/null || echo "no")"
 IS_ACTIVE="$(systemctl --user is-active "${TIMER}" 2>/dev/null || echo "no")"
 
@@ -118,9 +164,6 @@ else
     exit 1
 fi
 
-# ---------------------------------------------------------------------
-# LINGER DETECTION & WARNING
-# ---------------------------------------------------------------------
 LINGER_STATUS="unknown"
 if command -v loginctl &>/dev/null; then
     if loginctl show-user "$USER" --property=Linger 2>/dev/null | grep -q "Linger=yes"; then

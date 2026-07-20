@@ -28,32 +28,45 @@ if [ "$(id -u)" -eq 0 ]; then
     exit 1
 fi
 
+STATE_FILE_EXISTED=false
+if [ -f "${APP_STATE_FILE}" ]; then
+    STATE_FILE_EXISTED=true
+fi
+
 state_load
 
-INPUT_REMOTE="${BACKUP_REMOTE:-gdrive-hermes:}"
-parsed_input="$(rclone_parse_remote_and_path "${INPUT_REMOTE}")"
-BASE_REMOTE_ONLY="${parsed_input%%|*}"
-INPUT_PATH="${parsed_input#*|}"
+if [ "${STATE_FILE_EXISTED}" = true ]; then
+    BASE_REMOTE_ONLY="$(state_get "BASE_REMOTE")"
+    BASE_PATH_ONLY="$(state_get "BASE_PATH")"
 
-if [ -z "${BASE_REMOTE_ONLY}" ]; then
-    BASE_REMOTE_ONLY="gdrive-hermes:"
-fi
+    # Only check for mutation if BACKUP_REMOTE was explicitly set in environment
+    if [[ -v BACKUP_REMOTE ]]; then
+        parsed_input="$(rclone_parse_remote_and_path "${BACKUP_REMOTE}")"
+        requested_remote="${parsed_input%%|*}"
+        requested_path="${parsed_input#*|}"
+        requested_path="${requested_path%/}"
 
-# Detect existing state base remote and prevent silent mutation
-EXISTING_BASE="$(state_get "BASE_REMOTE" "")"
-if [ -n "${EXISTING_BASE}" ] && [ -f "${APP_STATE_FILE}" ]; then
-    local_exist_norm="${EXISTING_BASE%%:*}"
-    input_norm="${BASE_REMOTE_ONLY%%:*}"
-    if [ "${local_exist_norm}" != "${input_norm}" ]; then
-        echo -e "${BADGE_ERR} ${C_RED}[ERR] Base remote in state.env is '${EXISTING_BASE}', but BACKUP_REMOTE is '${BASE_REMOTE_ONLY}'.${C_RESET}" >&2
-        echo -e "${C_RED}[ERR] Silent mutation prohibited: changing base remote requires manual repair or future maintenance command.${C_RESET}" >&2
-        exit 1
+        [ -z "${requested_remote}" ] && requested_remote="gdrive-hermes:"
+        [ -z "${requested_path}" ] && requested_path="HermesBackups"
+
+        current_endpoint="$(rclone_normalize_base_endpoint "${BASE_REMOTE_ONLY}" "${BASE_PATH_ONLY}")"
+        requested_endpoint="$(rclone_normalize_base_endpoint "${requested_remote}" "${requested_path}")"
+
+        if [ "${current_endpoint}" != "${requested_endpoint}" ]; then
+            echo -e "${BADGE_ERR} ${C_RED}[ERR] Configured base destination is '${current_endpoint}', but BACKUP_REMOTE requests '${requested_endpoint}'.${C_RESET}" >&2
+            echo -e "${C_RED}[ERR] Changing base destination in normal setup is prohibited to prevent state corruption.${C_RESET}" >&2
+            exit 1
+        fi
     fi
-fi
+else
+    input_remote="${BACKUP_REMOTE:-gdrive-hermes:HermesBackups}"
+    parsed_input="$(rclone_parse_remote_and_path "${input_remote}")"
 
-BASE_PATH_ONLY="$(state_get "BASE_PATH" "")"
-if [ -z "${BASE_PATH_ONLY}" ]; then
-    BASE_PATH_ONLY="${INPUT_PATH}"
+    BASE_REMOTE_ONLY="${parsed_input%%|*}"
+    BASE_PATH_ONLY="${parsed_input#*|}"
+    BASE_PATH_ONLY="${BASE_PATH_ONLY%/}"
+
+    [ -z "${BASE_REMOTE_ONLY}" ] && BASE_REMOTE_ONLY="gdrive-hermes:"
     [ -z "${BASE_PATH_ONLY}" ] && BASE_PATH_ONLY="HermesBackups"
 fi
 
@@ -133,7 +146,7 @@ echo -e "${C_BOLD}[3/${TOTAL_STEPS}] Configuring client-side encryption...${C_RE
 
 if encryption_is_enabled; then
     CRYPT_REMOTE_CUR="$(state_get "CRYPT_REMOTE")"
-    EXPECTED_BASE="${BASE_REMOTE_ONLY%/:}/${BASE_PATH_ONLY}"
+    EXPECTED_BASE="$(rclone_normalize_base_endpoint "$(state_get "BASE_REMOTE")" "$(state_get "BASE_PATH")")"
     if encryption_validate_crypt_remote "${CRYPT_REMOTE_CUR}" "${EXPECTED_BASE}"; then
         echo -e "  ${BADGE_OK} Client-side encryption is already configured."
         echo -e "  ${BADGE_OK} Existing crypt remote '${CRYPT_REMOTE_CUR}' was retained."
@@ -185,6 +198,19 @@ else
             exit 1
         fi
     else
+        if rclone_has_remote "${DEFAULT_CRYPT_REMOTE_NAME:-hermes-backup-crypt}"; then
+            echo -e "${BADGE_ERR} ${C_RED}[ERR] Crypt remote '${DEFAULT_CRYPT_REMOTE_NAME:-hermes-backup-crypt}:' exists in rclone config, but application state does not link to it.${C_RESET}" >&2
+            echo -e "${C_RED}[ERR] Setup will not adopt, overwrite, disable, or ignore an unlinked crypt remote automatically.${C_RESET}" >&2
+            echo "Please repair state.env or rename/remove the conflicting remote manually." >&2
+            exit 1
+        fi
+
+        PLAINTEXT_ENDPOINT="$(rclone_compose_endpoint "${BASE_REMOTE_ONLY}" "${BASE_PATH_ONLY}")"
+        if ! rclone_check_writable_probe "${PLAINTEXT_ENDPOINT}"; then
+            echo -e "${BADGE_ERR} ${C_RED}Plaintext backup destination is not writable: ${PLAINTEXT_ENDPOINT}${C_RESET}" >&2
+            exit 1
+        fi
+
         echo -e "  ${BADGE_OK} Client-side encryption: DISABLED (Plaintext cloud backup mode)"
         state_set_many \
             "ENCRYPTION_ENABLED" "false" \

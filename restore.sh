@@ -12,6 +12,18 @@ source "${SCRIPT_DIR}/lib/state.sh"
 source "${SCRIPT_DIR}/lib/rclone.sh"
 source "${SCRIPT_DIR}/lib/encryption.sh"
 
+TARGET_FILE="${1:-}"
+
+if [ -n "${TARGET_FILE}" ]; then
+    # Strict regex validation for backup filename parameter
+    if ! [[ "${TARGET_FILE}" =~ ^hermes-backup-[A-Za-z0-9_.-]+\.(tar\.xz|zip)$ ]]; then
+        log_error "Invalid backup filename '${TARGET_FILE}'."
+        log_error "Expected a hermes-backup-*.tar.xz or hermes-backup-*.zip archive filename."
+        exit 1
+    fi
+    log_info "Target backup specified manually: ${TARGET_FILE}"
+fi
+
 rotate_log_file
 log_step "[1/3] Preflight checks & backup resolution..."
 
@@ -45,17 +57,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-TARGET_FILE="${1:-}"
-
-if [ -n "${TARGET_FILE}" ]; then
-    # Security check: Prevent path traversal in target filename parameter
-    base_target="$(basename "${TARGET_FILE}")"
-    if [ "${base_target}" != "${TARGET_FILE}" ] || [[ "${TARGET_FILE}" == *".."* ]] || [[ "${TARGET_FILE}" == *"/"* ]]; then
-        log_error "Invalid or unsafe backup filename '${TARGET_FILE}'. Target must be a simple filename without path traversal."
-        exit 1
-    fi
-    log_info "Target backup specified manually: ${TARGET_FILE}"
-else
+if [ -z "${TARGET_FILE}" ]; then
     log_info "Querying active source (${SOURCE}) for the latest backup..."
 
     raw_list="$(rclone_list_backups "${SOURCE}")"

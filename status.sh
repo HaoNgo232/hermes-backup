@@ -82,18 +82,27 @@ else
     REMOTE_REACHABLE_TEXT="${BADGE_ERR} no (rclone command missing)"
     IS_REACHABLE_RAW=false
     if encryption_is_enabled; then
-        ENC_MODE_TEXT="ENABLED"
+        ENC_MODE_TEXT="ERROR"
+        ENCRYPTION_STATUS_OK=false
+        ENC_REASON_TEXT="rclone command is missing; crypt remote cannot be validated."
         ACTIVE_ENDPOINT="$(state_get "CRYPT_REMOTE")"
     else
         ENC_MODE_TEXT="DISABLED"
-        ACTIVE_ENDPOINT="$(state_get "BASE_REMOTE" "gdrive-hermes:")"
+        ACTIVE_ENDPOINT="$(rclone_compose_endpoint "$(state_get "BASE_REMOTE" "gdrive-hermes:")" "$(state_get "BASE_PATH" "HermesBackups")")"
     fi
 fi
 
-# Pre-fetch latest backup if reachable
+# Pre-fetch latest backup if reachable (Propagate listing error if lsf fails)
 LATEST_BACKUP=""
+LATEST_LIST_OK=true
 if [ "${IS_REACHABLE_RAW}" = true ] && [ "${RCLONE_OK}" = true ] && [ "${ENCRYPTION_STATUS_OK}" = true ]; then
-    LATEST_BACKUP="$(rclone_list_backups "${ACTIVE_ENDPOINT}" | tail -n1 || true)"
+    if latest_list="$(rclone_list_backups "${ACTIVE_ENDPOINT}")"; then
+        LATEST_BACKUP="$(echo "${latest_list}" | tail -n1 || true)"
+    else
+        LATEST_LIST_OK=false
+        IS_REACHABLE_RAW=false
+        REMOTE_REACHABLE_TEXT="${BADGE_ERR} no (backup listing failed)"
+    fi
 fi
 
 # Systemd timer checks
@@ -110,7 +119,6 @@ TIMER_ENABLED_RAW=false
 TIMER_ACTIVE_RAW=false
 TIMER_ENABLED_TEXT="not-installed"
 TIMER_ACTIVE_TEXT="inactive"
-SERVICE_STATUS_TEXT="unknown"
 
 if command -v systemctl &>/dev/null && systemctl --user status &>/dev/null; then
     SYSTEMD_OK=true
@@ -119,14 +127,12 @@ if command -v systemctl &>/dev/null && systemctl --user status &>/dev/null; then
 
     [ "${TIMER_ENABLED_TEXT}" = "enabled" ] && TIMER_ENABLED_RAW=true
     [ "${TIMER_ACTIVE_TEXT}" = "active" ] && TIMER_ACTIVE_RAW=true
-
-    SERVICE_STATUS_TEXT="$(systemctl --user is-failed hermes-cloud-backup.service 2>/dev/null || echo "unknown")"
 fi
 
 HEALTH_OK=true
 if [ -z "${HERMES_RESOLVED}" ] || [ "${RCLONE_OK}" = false ] || [ "${IS_REACHABLE_RAW}" = false ] || \
-   [ "${ENCRYPTION_STATUS_OK}" = false ] || [ "${SYSTEMD_OK}" = false ] || [ "${UNITS_EXIST}" = false ] || \
-   [ "${TIMER_ENABLED_RAW}" = false ] || [ "${TIMER_ACTIVE_RAW}" = false ]; then
+   [ "${ENCRYPTION_STATUS_OK}" = false ] || [ "${LATEST_LIST_OK}" = false ] || [ "${SYSTEMD_OK}" = false ] || \
+   [ "${UNITS_EXIST}" = false ] || [ "${TIMER_ENABLED_RAW}" = false ] || [ "${TIMER_ACTIVE_RAW}" = false ]; then
     HEALTH_OK=false
 fi
 
@@ -202,6 +208,22 @@ if [ "${SYSTEMD_OK}" = true ]; then
         echo ""
         echo -e "  ${C_BOLD}Next Scheduled Runs:${C_RESET}"
         systemctl --user list-timers hermes-cloud-backup.timer --no-pager 2>/dev/null | sed 's/^/    /' || true
+    fi
+
+    LINGER_STATUS="unknown"
+    if command -v loginctl &>/dev/null; then
+        if loginctl show-user "$USER" --property=Linger 2>/dev/null | grep -q "Linger=yes"; then
+            LINGER_STATUS="enabled"
+        elif [ -f "/var/lib/systemd/linger/$USER" ]; then
+            LINGER_STATUS="enabled"
+        else
+            LINGER_STATUS="disabled"
+        fi
+    fi
+    if [ "${LINGER_STATUS}" = "enabled" ]; then
+        echo -e "  User Linger      : ${BADGE_OK} enabled"
+    elif [ "${LINGER_STATUS}" = "disabled" ]; then
+        echo -e "  User Linger      : ${BADGE_WARN} disabled (timer will not run after logout)"
     fi
 fi
 

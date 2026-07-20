@@ -6,10 +6,11 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
-WorkingDirectory=@REPO_DIR@
-Environment=HERMES_HOME=%h/.hermes
-Environment=HERMES_BIN=@HERMES_BIN@
-Environment=PATH=@PATH@
-ExecStart=@REPO_DIR@/backup.sh
+WorkingDirectory="@REPO_DIR@"
+Environment="HERMES_HOME=@HERMES_HOME@"
+Environment="HERMES_BIN=@HERMES_BIN@"
+Environment="XDG_CONFIG_HOME=@XDG_CONFIG_HOME@"
+Environment="PATH=@PATH@"
+ExecStart="@REPO_DIR@/backup.sh"
 Nice=10
 IOSchedulingClass=idle

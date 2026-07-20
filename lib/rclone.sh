@@ -4,6 +4,11 @@
 # =====================================================================
 set -Eeuo pipefail
 
+if [ "${HERMES_RCLONE_SH_LOADED:-false}" = "true" ]; then
+    return 0
+fi
+HERMES_RCLONE_SH_LOADED=true
+
 RCLONE_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [ -f "${RCLONE_LIB_DIR}/common.sh" ]; then
     source "${RCLONE_LIB_DIR}/common.sh"
@@ -16,7 +21,10 @@ rclone_require() {
 # Redact potentially sensitive tokens/passwords from output logs
 rclone_sanitize_output() {
     local text="$1"
-    echo "${text}" | sed -E 's/pass(word)?2? = [^ ]*/password = [REDACTED]/gi; s/token = [^ ]*/token = [REDACTED]/gi'
+    printf '%s\n' "${text}" | sed -E \
+        -e 's/([Pp]assword2?|[Tt]oken|[Aa]ccess_[Tt]oken|[Rr]efresh_[Tt]oken|[Cc]lient_[Ss]ecret)[[:space:]]*[:=][[:space:]]*[^[:space:]]+/\1 = [REDACTED]/g' \
+        -e 's/"(password2?|token|access_token|refresh_token|client_secret)"[[:space:]]*:[[:space:]]*"[^"]*"/"\1": "[REDACTED]"/Ig' \
+        -e 's/([Aa]uthorization:[[:space:]]*)?[Bb]earer[[:space:]]+[A-Za-z0-9._~+\/=-]+/Authorization: Bearer [REDACTED]/g'
 }
 
 rclone_normalize_remote() {
@@ -92,6 +100,12 @@ rclone_compose_endpoint() {
     local effective_path="${path}"
     if [ -z "${effective_path}" ]; then
         effective_path="${embedded_path}"
+    elif [ -n "${embedded_path}" ] && [ "${effective_path}" != "${embedded_path}" ]; then
+        if [[ "${effective_path}" == "${embedded_path}"* ]]; then
+            :
+        else
+            effective_path="${embedded_path%/}/${effective_path#/}"
+        fi
     fi
 
     effective_remote="$(rclone_normalize_remote "${effective_remote}")"
@@ -112,7 +126,7 @@ rclone_has_remote() {
     local remote_name="$1"
     rclone_require
     remote_name="${remote_name%%:*}"
-    rclone listremotes 2>/dev/null | grep -q "^${remote_name}:$"
+    rclone listremotes 2>/dev/null | grep -Fxq -- "${remote_name}:"
 }
 
 rclone_check_remote_root() {
@@ -154,30 +168,33 @@ rclone_check_reachability() {
         return 1
     fi
 
-    if rclone lsf "${full_endpoint}" --max-depth 0 &>/dev/null; then
-        echo "EXISTS"
-        return 0
-    else
-        echo "CREATED_ON_UPLOAD"
-        return 0
-    fi
+    # Subfolder target may not exist yet on fresh setup, so root reachability is sufficient.
+    echo "EXISTS"
+    return 0
 }
 
 rclone_check_writable_probe() {
     local endpoint="$1"
     rclone_require
 
+    endpoint="${endpoint%/}/"
+
     local probe_file
-    probe_file="$(mktemp /tmp/hermes-probe-XXXXXX)"
-    echo "hermes-probe-test" > "${probe_file}"
+    probe_file="$(mktemp "${TMPDIR:-/tmp}/hermes-probe-XXXXXX")"
+    chmod 0600 "${probe_file}" 2>/dev/null || true
+    printf '%s\n' "hermes-probe-test" > "${probe_file}"
 
     local probe_name="hermes-probe-$(date +%s%N).tmp"
     local target_probe="${endpoint}${probe_name}"
 
     local success=false
     if rclone copyto "${probe_file}" "${target_probe}" &>/dev/null; then
-        rclone deletefile "${target_probe}" &>/dev/null || rclone delete "${target_probe}" &>/dev/null || true
-        success=true
+        if rclone deletefile "${target_probe}" &>/dev/null; then
+            success=true
+        else
+            log_error "Writable probe uploaded successfully but remote probe cleanup failed."
+            success=false
+        fi
     fi
 
     rm -f "${probe_file}" 2>/dev/null || true
@@ -222,9 +239,15 @@ rclone_verify_object() {
     local remote_file_path="$1"
     rclone_require
 
+    local out
+    if ! out="$(rclone lsf "${remote_file_path}" --format "s" --files-only 2>&1)"; then
+        log_error "Unable to verify remote object '${remote_file_path}'."
+        log_error "rclone output: $(rclone_sanitize_output "${out}")"
+        return 1
+    fi
+
     local size_out
-    size_out="$(rclone lsf "${remote_file_path}" --format "s" --files-only 2>/dev/null || echo "0")"
-    size_out="$(echo "${size_out}" | tr -d '[:space:]')"
+    size_out="$(printf '%s' "${out}" | tr -d '[:space:]')"
 
     if [[ "${size_out}" =~ ^[0-9]+$ ]] && [ "${size_out}" -gt 0 ]; then
         return 0
@@ -234,14 +257,29 @@ rclone_verify_object() {
     return 1
 }
 
+# Clean list backups: Returns error if rclone lsf fails, so callers don't falsely report empty folder
 rclone_list_backups() {
     local remote_path="$1"
     rclone_require
-    rclone lsf "${remote_path}" --format "tps" --files-only 2>/dev/null | grep -E '^[0-9T:Z. -]+;hermes-backup-.*\.(tar\.xz|zip);[0-9]+$' | sort || true
+
+    local raw_lsf
+    if ! raw_lsf="$(rclone lsf "${remote_path}" --format "tps" --files-only 2>&1)"; then
+        log_error "Failed to list remote backups at '${remote_path}'."
+        log_error "rclone output: $(rclone_sanitize_output "${raw_lsf}")"
+        return 1
+    fi
+
+    echo "${raw_lsf}" | grep -E '^[0-9T:Z. -]+;hermes-backup-.*\.(tar\.xz|zip);[0-9]+$' | sort || true
 }
 
+# Delete file specifically with deletefile (no recursive delete fallback)
 rclone_delete_remote_file() {
     local remote_file_path="$1"
     rclone_require
-    rclone deletefile "${remote_file_path}" 2>/dev/null || rclone delete "${remote_file_path}" 2>/dev/null
+    local out
+    if ! out="$(rclone deletefile "${remote_file_path}" 2>&1)"; then
+        log_error "rclone deletefile failed for '${remote_file_path}'."
+        log_error "rclone output: $(rclone_sanitize_output "${out}")"
+        return 1
+    fi
 }

@@ -4,31 +4,17 @@
 # =====================================================================
 set -Eeuo pipefail
 
+if [ "${HERMES_COMMON_SH_LOADED:-false}" = "true" ]; then
+    return 0
+fi
+HERMES_COMMON_SH_LOADED=true
+
 COMMON_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPT_DIR="$(cd "${COMMON_LIB_DIR}/.." && pwd)"
 
 # Application config and state paths
 APP_CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/hermes-backup"
 APP_STATE_FILE="${APP_CONFIG_DIR}/state.env"
-
-verify_permissions() {
-    local target="$1"
-    local expected="$2"
-    expected="${expected#0}" # Normalize leading 0 (e.g. 0600 -> 600)
-    local actual
-    actual="$(stat -c "%a" "${target}" 2>/dev/null || stat -f "%Lp" "${target}" 2>/dev/null || echo "")"
-    actual="${actual#0}"
-    if [ "${actual}" != "${expected}" ]; then
-        log_error "Permission enforcement failed on '${target}': expected permissions ${expected}, got '${actual}'."
-        return 1
-    fi
-    return 0
-}
-
-# Ensure config directory exists with 0700 permissions
-mkdir -p "${APP_CONFIG_DIR}"
-chmod 0700 "${APP_CONFIG_DIR}" 2>/dev/null || true
-verify_permissions "${APP_CONFIG_DIR}" "700" || true
 
 LOG_DIR="${SCRIPT_DIR}/logs"
 LOG_FILE="${LOG_FILE:-}"
@@ -72,10 +58,11 @@ strip_ansi() {
     sed -E 's/\x1B\[[0-9;]*[a-zA-Z]//g'
 }
 
+# ALL log output MUST go to stderr (>&2) to preserve clean stdout for function returns
 log_raw() {
     local timestamp
     timestamp="$(date '+%Y-%m-%d %H:%M:%S')"
-    echo -e "${timestamp} - $*"
+    echo -e "${timestamp} - $*" >&2
     if [ -n "${LOG_FILE:-}" ]; then
         local log_dir
         log_dir="$(dirname "${LOG_FILE}")"
@@ -121,12 +108,29 @@ log_step() {
     log_raw "${C_CYAN}${C_BOLD}${ICON_STEP} $*${C_RESET}"
 }
 
-# Terminal interactive check
-is_interactive_tty() {
-    [ -t 0 ] && [ -t 1 ]
+verify_permissions() {
+    local target="$1"
+    local expected="$2"
+    expected="${expected#0}"
+    local actual
+    actual="$(stat -c "%a" "${target}" 2>/dev/null || stat -f "%Lp" "${target}" 2>/dev/null || echo "")"
+    actual="${actual#0}"
+    if [ "${actual}" != "${expected}" ]; then
+        log_error "Permission enforcement failed on '${target}': expected permissions ${expected}, got '${actual}'."
+        return 1
+    fi
+    return 0
 }
 
-# Command checking
+# Enforce 0700 permissions on config directory (Fail-closed: NO || true)
+mkdir -p "${APP_CONFIG_DIR}"
+chmod 0700 "${APP_CONFIG_DIR}"
+verify_permissions "${APP_CONFIG_DIR}" "700"
+
+is_interactive_tty() {
+    [ -t 0 ] && [ -t 1 ] && [ -t 2 ]
+}
+
 require_command() {
     local cmd="$1"
     if ! command -v "${cmd}" &>/dev/null; then
@@ -139,7 +143,7 @@ require_command() {
 check_cmd() {
     local cmd="$1"
     if command -v "${cmd}" &>/dev/null; then
-        echo -e "  ${BADGE_OK} ${cmd}"
+        echo -e "  ${BADGE_OK} ${cmd}" >&2
         return 0
     else
         echo -e "  ${BADGE_ERR} ${C_RED}Missing command '${cmd}'${C_RESET}" >&2
@@ -147,7 +151,6 @@ check_cmd() {
     fi
 }
 
-# Atomic file write helper (Fixed: printf "%s" without trailing newline and leading 0 permission normalization)
 atomic_write_file() {
     local target_file="$1"
     local mode="${3:-0600}"
@@ -155,7 +158,7 @@ atomic_write_file() {
     local parent_dir
     parent_dir="$(dirname "${target_file}")"
     mkdir -p "${parent_dir}"
-    chmod 0700 "${parent_dir}" 2>/dev/null || true
+    chmod 0700 "${parent_dir}"
 
     local tmp_file
     tmp_file="$(mktemp "${parent_dir}/tmp.XXXXXX")"
@@ -166,10 +169,10 @@ atomic_write_file() {
         cat > "${tmp_file}"
     fi
 
-    chmod "${mode}" "${tmp_file}" 2>/dev/null || true
-    verify_permissions "${tmp_file}" "${mode}" || true
+    chmod "${mode}" "${tmp_file}"
+    verify_permissions "${tmp_file}" "${mode}"
     mv -f "${tmp_file}" "${target_file}"
-    verify_permissions "${target_file}" "${mode}" || true
+    verify_permissions "${target_file}" "${mode}"
 }
 
 is_boolean() {

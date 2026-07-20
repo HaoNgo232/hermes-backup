@@ -42,7 +42,7 @@ Backups will run automatically **every 4 hours** (02:00, 06:00, 10:00, 14:00, 18
 
 ## Common Commands
 
-### Daily Backup Use
+### Routine Backup Operations
 
 | Task                                        | Command             | Description                                                                    |
 | :------------------------------------------ | :------------------ | :----------------------------------------------------------------------------- |
@@ -78,13 +78,15 @@ Backups will run automatically **every 4 hours** (02:00, 06:00, 10:00, 14:00, 18
 
 ## Optional Client-Side Encryption
 
-Client-side encryption is an **optional feature** that protects your cloud backups before they ever leave your server.
+Client-side encryption is an **optional feature** and is **disabled by default**. Existing plaintext users will continue using standard unencrypted backups unless encryption is explicitly enabled during setup.
+
+Encryption is implemented using **rclone crypt** with encrypted file contents, filenames, and directory names.
 
 ### What does it do?
 
-- 🔒 **Complete Privacy:** Your backup data, folder structure, and filenames are encrypted locally on your server *before* being uploaded.
-- 🙈 **Zero-Knowledge Cloud Storage:** Google Drive (or anyone looking at your Google account) only sees random, unreadable scrambled files.
-- ⚡ **Hands-Free Automation:** Once set up, daily backups (`./backup.sh`) and restores (`./restore.sh`) continue to run automatically in the background without prompting you for a password every time.
+- 🔒 **Data Confidentiality:** Backup archives, directory structure, and filenames are encrypted locally on your server *before* being uploaded.
+- 🙈 **Unreadable Cloud Storage:** Cloud storage files are unreadable without the local `rclone` crypt configuration or independently saved recovery material.
+- ⚡ **Unattended Backups:** Scheduled backups (`./backup.sh`) run automatically in the background without prompting for a password. Manual restores (`./restore.sh`) also decrypt automatically using your local rclone configuration.
 
 ---
 
@@ -134,12 +136,84 @@ Type SAVED to confirm that you saved the recovery material:
 ### 🛡️ 3 Simple Rules for Encrypted Backups
 
 1. 🔐 **Save Both Keys Immediately:** Copy the `Recovery password` and `Recovery salt` into a password manager (like Bitwarden, 1Password) or an encrypted note.
-2. 🚫 **Never Save Keys in Google Drive:** Do not save your recovery keys in the same Google Drive account/folder as your backups. If you lose access to Google Drive, you lose both!
+2. 🚫 **Store Recovery Material Independently:** Store recovery keys independently so that a single cloud account lockout, compromise, or deletion event does not affect both your backups and recovery material.
 3. 🤖 **Do Not Rename Files Manually:** In Google Drive, encrypted filenames will look like random strings (e.g. `a1b2c3d4...`). Do not rename or delete them directly in Google Drive interface. Let `backup.sh`, `restore.sh`, and `status.sh` manage them.
 
 > [!WARNING]
 > **No Key, No Restore!**  
 > If your server is wiped **AND** you lose your saved recovery keys, your encrypted cloud backups **cannot be decrypted by anyone** (including us or Google). Keep your recovery keys safe!
+
+---
+
+### Threat Model & Limitations
+
+Client-side encryption provides confidentiality guarantees under specific conditions:
+
+- **What Encryption Protects Against:** It protects cloud backup confidentiality if an unauthorized entity accesses your raw cloud-storage files without having access to your server's local `rclone` crypt config or recovery material.
+- **Server Compromise:** Encryption does not fully protect against full compromise of the local VPS or user account running automatic backups, because that machine must maintain local `rclone` credentials to perform unattended operation.
+- **Deletion & Storage Wipe:** Encryption protects data confidentiality; it does not prevent cloud backups from being deleted or overwritten. Cloud versioning and maintaining a second backup destination are separate operational concerns.
+
+---
+
+### Recovering on a New Server
+
+If your original server and its local `rclone.conf` are lost:
+
+1. Install `rclone` and configure the original base cloud remote (`gdrive-hermes:`).
+2. Recreate an `rclone crypt` remote (`hermes-backup-crypt:`) pointing to `gdrive-hermes:HermesBackupsEncrypted`.
+3. Provide your saved **Recovery Password** and **Recovery Salt**.
+4. Set `filename_encryption = standard` and `directory_name_encryption = true`.
+5. Verify the crypt remote connection:
+
+   ```bash
+   rclone lsf hermes-backup-crypt:
+   ```
+
+6. Recreate your local `state.env` file before running setup or restore (since setup will refuse to auto-adopt an existing crypt remote without application state):
+
+   ```bash
+   CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/hermes-backup"
+   mkdir -p "${CONFIG_DIR}"
+   chmod 0700 "${CONFIG_DIR}"
+
+   cat > "${CONFIG_DIR}/state.env" <<'EOF'
+   STATE_SCHEMA_VERSION=1
+   ENCRYPTION_ENABLED=true
+   ENCRYPTION_MODE=rclone-crypt
+   BASE_REMOTE=gdrive-hermes:
+   BASE_PATH=HermesBackupsEncrypted
+   CRYPT_REMOTE=hermes-backup-crypt:
+   CRYPT_PATH=
+   RECOVERY_NOTICE_STATE=shown
+   ENCRYPTION_SETUP_COMPLETED_AT=
+   EOF
+
+   chmod 0600 "${CONFIG_DIR}/state.env"
+   ```
+
+7. Execute status, install timer, and restore backups:
+
+   ```bash
+   ./status.sh
+   ./install-systemd.sh
+   ./restore.sh
+   ```
+
+> [!NOTE]
+> Do NOT generate a new password or salt for an existing encrypted backup folder. New credentials cannot decrypt old backups!
+
+---
+
+## Local Configuration Files
+
+Hermes Backup maintains state and credentials in the following local files:
+
+- **Application State File:**  
+  `${XDG_CONFIG_HOME:-$HOME/.config}/hermes-backup/state.env`  
+  *(Contains operational flags, remote names, and path settings with `0600` permissions. Contains **no** passwords or secret keys).*
+- **Rclone Operational Credentials:**  
+  `~/.config/rclone/rclone.conf`  
+  *(Contains cloud OAuth tokens and obscured crypt remote configuration).*
 
 ---
 
@@ -151,7 +225,7 @@ The `./status.sh` diagnostic tool enforces a strict exit status contract:
 - **Exit Code `1` (`OVERALL STATUS: ACTION REQUIRED`)**: Returned when a blocking issue exists (e.g. missing tools, Google Drive unreachable, or timer inactive).
 
 > [!NOTE]
-> User linger disabled is reported as a non-blocking warning because it only affects unattended execution after user logout or system reboot.
+> User linger status is reported as a non-blocking informational warning because it only affects unattended execution after user logout or system reboot.
 
 For automated monitoring or CI scripts, use the `--check` flag for a single-line summary output:
 

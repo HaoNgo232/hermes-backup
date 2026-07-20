@@ -86,7 +86,10 @@ cleanup_gfs() {
     now_epoch="$(date +%s)"
 
     local raw_list
-    raw_list="$(rclone_list_backups "${target_dest}")"
+    if ! raw_list="$(rclone_list_backups "${target_dest}")"; then
+        log_error "GFS cleanup aborted due to listing failure."
+        exit 1
+    fi
 
     if [ -z "${raw_list}" ]; then
         log_info "No previous backups found for GFS evaluation."
@@ -101,7 +104,6 @@ cleanup_gfs() {
     while IFS=; read -r line || [ -n "${line}" ]; do
         [ -z "${line}" ] && continue
 
-        # Parse timestamp, filename, and size cleanly
         local file_time_str="" file_name="" file_size=""
         IFS=';' read -r file_time_str file_name file_size <<< "${line}"
 
@@ -136,10 +138,10 @@ cleanup_gfs() {
             continue
         fi
 
-        # Tier 3: 8 to 28 days -> Keep 1 per week (latest of week)
+        # Tier 3: 8 to 28 days -> Keep 1 per week (latest of ISO week %G-%V)
         if [ "${age_days}" -le 28 ]; then
             local week_key
-            week_key="$(date -d "@${file_epoch}" +%Y-%V 2>/dev/null || echo "")"
+            week_key="$(date -d "@${file_epoch}" +%G-%V 2>/dev/null || echo "")"
             if [ -n "${week_key}" ]; then
                 if [ -n "${weekly_map[${week_key}]:-}" ]; then
                     to_delete+=("${weekly_map[${week_key}]}")
@@ -187,7 +189,6 @@ log_step "Starting Hermes Backup Workflow..."
 check_timer_warning
 preflight_backup
 
-# Show single-time recovery reminder if state is pending
 encryption_show_first_backup_reminder_if_needed
 
 TIMESTAMP="$(date +%d-%m-%Y_%Hh%Mp%Ss)"
@@ -199,8 +200,12 @@ TMP_EXTRACT="${WORKSPACE}/extract"
 TMP_XZ="${WORKSPACE}/${ARCHIVE_NAME}"
 
 log_step "[1/4] Generating raw Hermes export..."
-# Use hermes backup command per spec requirement
-"${HERMES_RESOLVED}" backup -o "${TMP_ZIP}" 2>/dev/null || "${HERMES_RESOLVED}" backup --output "${TMP_ZIP}" 2>/dev/null || "${HERMES_RESOLVED}" export --output "${TMP_ZIP}"
+local_backup_out=""
+if ! local_backup_out="$("${HERMES_RESOLVED}" backup -o "${TMP_ZIP}" 2>&1)"; then
+    log_error "Hermes backup command failed:"
+    log_error "${local_backup_out}"
+    exit 1
+fi
 
 if [ ! -f "${TMP_ZIP}" ]; then
     log_error "Hermes backup failed: file ${TMP_ZIP} was not created."

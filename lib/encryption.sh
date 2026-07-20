@@ -4,6 +4,11 @@
 # =====================================================================
 set -Eeuo pipefail
 
+if [ "${HERMES_ENCRYPTION_SH_LOADED:-false}" = "true" ]; then
+    return 0
+fi
+HERMES_ENCRYPTION_SH_LOADED=true
+
 ENC_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [ -f "${ENC_LIB_DIR}/common.sh" ]; then
     source "${ENC_LIB_DIR}/common.sh"
@@ -70,7 +75,8 @@ encryption_validate_crypt_remote() {
     # Validate target remote mapping if expected base target is specified
     if [ -n "${expected_base_target}" ]; then
         local configured_target
-        configured_target="$(echo "${show_config}" | grep -i "^remote =" | cut -d'=' -f2- | xargs || echo "")"
+        configured_target="$(echo "${show_config}" | grep -i "^remote =" | cut -d'=' -f2- || echo "")"
+        configured_target="$(state_trim "${configured_target}")"
         local expected_norm
         expected_norm="${expected_base_target%/}"
         local configured_norm
@@ -196,48 +202,57 @@ encryption_display_recovery_screen_and_confirm() {
     local pass="$1"
     local salt="$2"
 
-    if ! is_interactive_tty; then
-        echo -e "${C_RED}ERROR: Encryption setup must be run interactively attached to a TTY.${C_RESET}" >&2
-        echo "Non-interactive setups cannot safely display recovery material." >&2
+    if [ ! -r /dev/tty ] || [ ! -w /dev/tty ]; then
+        log_error "Encryption setup requires an interactive terminal attached to /dev/tty."
         return 1
     fi
 
-    echo ""
-    echo "======================================================================"
-    echo "IMPORTANT: ENCRYPTED BACKUP RECOVERY MATERIAL"
-    echo "======================================================================"
-    echo ""
-    echo "Your cloud backups will be encrypted before upload."
-    echo ""
-    echo "Save BOTH values below in a password manager, encrypted offline note,"
-    echo "or another secure location independent from:"
-    echo ""
-    echo "  - this VPS/computer"
-    echo "  - this Hermes installation"
-    echo "  - this rclone configuration"
-    echo "  - this cloud-storage account and backup folder"
-    echo ""
-    echo "If you lose both this machine/rclone configuration and these values,"
-    echo "encrypted backups cannot be restored."
-    echo ""
-    echo "Recovery password:"
-    echo "  ${pass}"
-    echo ""
-    echo "Recovery salt:"
-    echo "  ${salt}"
-    echo ""
-    echo "Do NOT save these values in the same Google Drive folder that stores"
-    echo "the encrypted backups."
-    echo ""
-    echo "Type SAVED to confirm that you saved the recovery material:"
-    echo "======================================================================"
-    read -r user_confirm
+    local user_confirm=""
+
+    exec 3<>/dev/tty || {
+        log_error "Unable to open controlling terminal (/dev/tty)."
+        return 1
+    }
+
+    {
+        printf '\n'
+        printf '%s\n' "======================================================================"
+        printf '%s\n' "IMPORTANT: ENCRYPTED BACKUP RECOVERY MATERIAL"
+        printf '%s\n' "======================================================================"
+        printf '\n'
+        printf '%s\n' "Your cloud backups will be encrypted before upload."
+        printf '\n'
+        printf '%s\n' "Save BOTH values below in a password manager, encrypted offline note,"
+        printf '%s\n' "or another secure location independent from:"
+        printf '\n'
+        printf '%s\n' "  - this VPS/computer"
+        printf '%s\n' "  - this Hermes installation"
+        printf '%s\n' "  - this rclone configuration"
+        printf '%s\n' "  - this cloud-storage account and backup folder"
+        printf '\n'
+        printf '%s\n' "If you lose both this machine/rclone configuration and these values,"
+        printf '%s\n' "encrypted backups cannot be restored."
+        printf '\n'
+        printf '%s\n' "Recovery password:"
+        printf '  %s\n' "${pass}"
+        printf '\n'
+        printf '%s\n' "Recovery salt:"
+        printf '  %s\n' "${salt}"
+        printf '\n'
+        printf '%s\n' "Do NOT save these values in the same Google Drive folder that stores"
+        printf '%s\n' "the encrypted backups."
+        printf '\n'
+        printf '%s\n' "Type SAVED to confirm that you saved the recovery material:"
+        printf '%s\n' "======================================================================"
+    } >&3
+
+    IFS= read -r user_confirm <&3
+    exec 3>&- 3<&- || true
 
     if [ "${user_confirm}" = "SAVED" ]; then
         return 0
     else
-        echo ""
-        echo -e "${C_RED}Confirmation failed (input was not 'SAVED'). Encryption setup not completed.${C_RESET}" >&2
+        echo "Confirmation failed (input was not 'SAVED'). Encryption setup not completed." >&2
         return 1
     fi
 }
@@ -277,11 +292,7 @@ cannot be restored without the saved recovery material.
 This reminder is shown only once.
 ======================================================================"
 
-        echo "${reminder_msg}"
-        if [ -n "${LOG_FILE:-}" ]; then
-            echo "${reminder_msg}" >> "${LOG_FILE}"
-        fi
-
+        log_raw "${reminder_msg}"
         state_set "RECOVERY_NOTICE_STATE" "shown"
     fi
 }
