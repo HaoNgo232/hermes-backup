@@ -1,53 +1,22 @@
 #!/usr/bin/env bash
 # =====================================================================
 # status.sh - Hermes Backup Diagnostic & Status Tool
-# ---------------------------------------------------------------------
-# Read-only health check for Hermes backup installation, systemd timer,
-# remote connectivity, and latest backup state.
-# Exits with 0 when system is HEALTHY, exits with 1 when ACTION REQUIRED.
-# Supports --check for minimal automated output.
 # =====================================================================
 set -Eeuo pipefail
 
-if [ -t 1 ]; then
-    C_RESET="\033[0m"
-    C_BOLD="\033[1m"
-    C_RED="\033[0;31m"
-    C_GREEN="\033[0;32m"
-    C_YELLOW="\033[0;33m"
-    C_CYAN="\033[0;36m"
-    FMT_OK="\033[0;32m[ OK ]\033[0m"
-    FMT_ERR="\033[0;31m[ FAIL ]\033[0m"
-    FMT_WARN="\033[0;33m[ WARN ]\033[0m"
-else
-    C_RESET=""
-    C_BOLD=""
-    C_RED=""
-    C_GREEN=""
-    C_YELLOW=""
-    C_CYAN=""
-    FMT_OK="[ OK ]"
-    FMT_ERR="[ FAIL ]"
-    FMT_WARN="[ WARN ]"
-fi
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/lib/common.sh"
+source "${SCRIPT_DIR}/lib/state.sh"
+source "${SCRIPT_DIR}/lib/rclone.sh"
+source "${SCRIPT_DIR}/lib/encryption.sh"
 
 CHECK_ONLY=false
 if [ "${1:-}" = "--check" ] || [ "${1:-}" = "-c" ]; then
     CHECK_ONLY=true
 fi
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REMOTE="${BACKUP_REMOTE:-gdrive-hermes:HermesBackups}"
+state_load
 
-case "${REMOTE}" in
-    *:) ;;
-    */) ;;
-    *) REMOTE="${REMOTE}/" ;;
-esac
-
-# ---------------------------------------------------------------------
-# RAW DATA COLLECTION & HEALTH EVALUATION
-# ---------------------------------------------------------------------
 HERMES_RESOLVED=""
 if [ -n "${HERMES_BIN:-}" ] && [ -x "${HERMES_BIN}" ]; then
     HERMES_RESOLVED="${HERMES_BIN}"
@@ -58,44 +27,52 @@ fi
 RCLONE_OK=false
 REMOTE_REACHABLE_TEXT="no"
 IS_REACHABLE_RAW=false
-REMOTE_NAME="${REMOTE%%:*}"
+
+# Evaluate Encryption State & Destination
+ENCRYPTION_STATUS_OK=true
+ENC_MODE_TEXT="DISABLED"
+ENC_REASON_TEXT=""
+
+if encryption_is_enabled; then
+    CRYPT_REMOTE_CUR="$(state_get "CRYPT_REMOTE")"
+    if encryption_validate_crypt_remote "${CRYPT_REMOTE_CUR}"; then
+        ENC_MODE_TEXT="ENABLED"
+        ACTIVE_DEST="${CRYPT_REMOTE_CUR}"
+    else
+        ENC_MODE_TEXT="ERROR"
+        ENCRYPTION_STATUS_OK=false
+        ENC_REASON_TEXT="configured crypt remote '${CRYPT_REMOTE_CUR}' is unavailable, invalid, or inconsistent."
+        ACTIVE_DEST="${CRYPT_REMOTE_CUR}"
+    fi
+else
+    ENC_MODE_TEXT="DISABLED"
+    BASE_REMOTE_CUR="$(state_get "BASE_REMOTE" "${BACKUP_REMOTE:-gdrive-hermes:HermesBackups}")"
+    ACTIVE_DEST="$(rclone_normalize_remote "${BASE_REMOTE_CUR}")"
+fi
 
 if command -v rclone &>/dev/null; then
     RCLONE_OK=true
-    if [ -n "${REMOTE_NAME}" ] && [ "${REMOTE_NAME}" != "${REMOTE}" ]; then
-        if ! rclone listremotes 2>/dev/null | grep -q "^${REMOTE_NAME}:"; then
-            REMOTE_REACHABLE_TEXT="${FMT_ERR} no (remote '${REMOTE_NAME}:' not configured in rclone)"
-            IS_REACHABLE_RAW=false
-        elif ! rclone lsf "${REMOTE_NAME}:" --max-depth 1 &>/dev/null; then
-            REMOTE_REACHABLE_TEXT="${FMT_ERR} no (cannot connect to remote '${REMOTE_NAME}:')"
-            IS_REACHABLE_RAW=false
-        else
-            if rclone lsf "${REMOTE}" --max-depth 0 &>/dev/null; then
-                REMOTE_REACHABLE_TEXT="${FMT_OK} yes"
-                IS_REACHABLE_RAW=true
-            else
-                REMOTE_REACHABLE_TEXT="${FMT_OK} yes (remote reachable; target folder will be created on upload)"
-                IS_REACHABLE_RAW=true
-            fi
-        fi
-    else
-        if rclone lsf "${REMOTE}" --max-depth 0 &>/dev/null; then
-            REMOTE_REACHABLE_TEXT="${FMT_OK} yes"
+    if [ "${ENCRYPTION_STATUS_OK}" = true ]; then
+        if rclone_check_path_reachable "${ACTIVE_DEST}"; then
+            REMOTE_REACHABLE_TEXT="${BADGE_OK} yes"
             IS_REACHABLE_RAW=true
         else
-            REMOTE_REACHABLE_TEXT="${FMT_ERR} no (cannot access remote path '${REMOTE}')"
-            IS_REACHABLE_RAW=false
+            REMOTE_REACHABLE_TEXT="${BADGE_OK} yes (reachable; target folder created on upload)"
+            IS_REACHABLE_RAW=true
         fi
+    else
+        REMOTE_REACHABLE_TEXT="${BADGE_ERR} no (${ENC_REASON_TEXT})"
+        IS_REACHABLE_RAW=false
     fi
 else
-    REMOTE_REACHABLE_TEXT="${FMT_ERR} no (rclone command missing)"
+    REMOTE_REACHABLE_TEXT="${BADGE_ERR} no (rclone command missing)"
     IS_REACHABLE_RAW=false
 fi
 
-# Pre-fetch latest backup if remote reachable
+# Pre-fetch latest backup if reachable
 LATEST_BACKUP=""
-if [ "${IS_REACHABLE_RAW}" = true ] && [ "${RCLONE_OK}" = true ]; then
-    LATEST_BACKUP="$(rclone lsf "${REMOTE}" --format "tps" --files-only 2>/dev/null | grep -E ';hermes-backup-.*\.(tar\.xz|zip);' | sort | tail -n1 || true)"
+if [ "${IS_REACHABLE_RAW}" = true ] && [ "${RCLONE_OK}" = true ] && [ "${ENCRYPTION_STATUS_OK}" = true ]; then
+    LATEST_BACKUP="$(rclone_list_backups "${ACTIVE_DEST}" | tail -n1 || true)"
 fi
 
 # Systemd timer checks
@@ -118,17 +95,18 @@ if command -v systemctl &>/dev/null && systemctl --user status &>/dev/null; then
     SYSTEMD_OK=true
     TIMER_ENABLED_TEXT="$(systemctl --user is-enabled hermes-cloud-backup.timer 2>/dev/null || echo "not-installed")"
     TIMER_ACTIVE_TEXT="$(systemctl --user is-active hermes-cloud-backup.timer 2>/dev/null || echo "inactive")"
-    
+
     [ "${TIMER_ENABLED_TEXT}" = "enabled" ] && TIMER_ENABLED_RAW=true
     [ "${TIMER_ACTIVE_TEXT}" = "active" ] && TIMER_ACTIVE_RAW=true
-    
+
     SERVICE_STATUS_TEXT="$(systemctl --user is-failed hermes-cloud-backup.service 2>/dev/null || echo "unknown")"
 fi
 
 # Overall Health Evaluation
 HEALTH_OK=true
 if [ -z "${HERMES_RESOLVED}" ] || [ "${RCLONE_OK}" = false ] || [ "${IS_REACHABLE_RAW}" = false ] || \
-   [ "${SYSTEMD_OK}" = false ] || [ "${UNITS_EXIST}" = false ] || [ "${TIMER_ENABLED_RAW}" = false ] || [ "${TIMER_ACTIVE_RAW}" = false ]; then
+   [ "${ENCRYPTION_STATUS_OK}" = false ] || [ "${SYSTEMD_OK}" = false ] || [ "${UNITS_EXIST}" = false ] || \
+   [ "${TIMER_ENABLED_RAW}" = false ] || [ "${TIMER_ACTIVE_RAW}" = false ]; then
     HEALTH_OK=false
 fi
 
@@ -153,7 +131,7 @@ echo -e "${C_CYAN}${C_BOLD}                  HERMES BACKUP SYSTEM STATUS        
 echo -e "${C_CYAN}${C_BOLD}=====================================================================${C_RESET}"
 echo -e "${C_CYAN}ℹ Checking system status & remote connectivity...${C_RESET}\n"
 
-# 1. Environment & Paths
+# 1. Environment & Config
 echo -e "${C_BOLD}[1] Environment & Configuration:${C_RESET}"
 echo "  Repository Path  : ${SCRIPT_DIR}"
 echo "  Backup Script    : ${SCRIPT_DIR}/backup.sh"
@@ -166,30 +144,47 @@ else
     echo -e "  Hermes Binary    : ${C_RED}NOT FOUND (hermes command not in PATH)${C_RESET}"
 fi
 
-echo "  Backup Remote    : ${REMOTE}"
+# 2. Encryption Status Report
+echo ""
+echo -e "${C_BOLD}[2] Encryption Status:${C_RESET}"
+if [ "${ENC_MODE_TEXT}" = "ENABLED" ]; then
+    echo "  Encryption Mode  : ENABLED"
+    echo "  Backend          : rclone crypt"
+    echo "  Crypt Remote     : ${ACTIVE_DEST}"
+    echo "  Data Security    : Client-side encrypted content & filenames"
+    echo "  Recovery Notice  : $(state_get "RECOVERY_NOTICE_STATE" "shown")"
+elif [ "${ENC_MODE_TEXT}" = "DISABLED" ]; then
+    echo "  Encryption Mode  : DISABLED"
+    echo "  Cloud Destination: ${ACTIVE_DEST}"
+else
+    echo -e "  Encryption Mode  : ${C_RED}ERROR${C_RESET}"
+    echo -e "  Reason           : ${C_RED}${ENC_REASON_TEXT}${C_RESET}"
+    echo "  Action           : Restore rclone configuration or repair crypt remote with saved recovery material."
+fi
+
 echo -e "  Remote Reachable : ${REMOTE_REACHABLE_TEXT}"
 
-# 2. Systemd Timer & Service Status
+# 3. Systemd Status
 echo ""
-echo -e "${C_BOLD}[2] Systemd Timer & Service Status:${C_RESET}"
+echo -e "${C_BOLD}[3] Systemd Timer & Service Status:${C_RESET}"
 
 if [ "${UNITS_EXIST}" = true ]; then
-    echo -e "  Unit Files       : ${FMT_OK} Installed (${SERVICE_UNIT})"
+    echo -e "  Unit Files       : ${BADGE_OK} Installed (${SERVICE_UNIT})"
 else
-    echo -e "  Unit Files       : ${FMT_WARN} NOT INSTALLED"
+    echo -e "  Unit Files       : ${BADGE_WARN} NOT INSTALLED"
 fi
 
 if [ "${SYSTEMD_OK}" = true ]; then
     if [ "${TIMER_ENABLED_RAW}" = true ]; then
-        echo -e "  Timer Enabled    : ${FMT_OK} enabled"
+        echo -e "  Timer Enabled    : ${BADGE_OK} enabled"
     else
-        echo -e "  Timer Enabled    : ${FMT_WARN} ${TIMER_ENABLED_TEXT}"
+        echo -e "  Timer Enabled    : ${BADGE_WARN} ${TIMER_ENABLED_TEXT}"
     fi
 
     if [ "${TIMER_ACTIVE_RAW}" = true ]; then
-        echo -e "  Timer Active     : ${FMT_OK} active"
+        echo -e "  Timer Active     : ${BADGE_OK} active"
     else
-        echo -e "  Timer Active     : ${FMT_WARN} ${TIMER_ACTIVE_TEXT}"
+        echo -e "  Timer Active     : ${BADGE_WARN} ${TIMER_ACTIVE_TEXT}"
     fi
 
     if [ "${TIMER_ENABLED_RAW}" = true ]; then
@@ -197,85 +192,27 @@ if [ "${SYSTEMD_OK}" = true ]; then
         echo -e "  ${C_BOLD}Next Scheduled Runs:${C_RESET}"
         systemctl --user list-timers hermes-cloud-backup.timer --no-pager 2>/dev/null | sed 's/^/    /' || true
     fi
-
-    if [ "${SERVICE_STATUS_TEXT}" = "failed" ]; then
-        echo -e "  Last Service Run : ${FMT_ERR} FAILED"
-    elif [ "${SERVICE_STATUS_TEXT}" = "active" ]; then
-        echo -e "  Last Service Run : ${C_CYAN}RUNNING${C_RESET}"
-    else
-        echo -e "  Last Service Run : ${FMT_OK} OK / Idle"
-    fi
-else
-    echo -e "  Systemctl        : Systemd user session not available"
 fi
 
-# 3. User Linger Status
+# 4. Latest Backup Status
 echo ""
-echo -e "${C_BOLD}[3] User Linger Status:${C_RESET}"
-LINGER_STATUS="unknown"
-if command -v loginctl &>/dev/null; then
-    if loginctl show-user "$USER" --property=Linger 2>/dev/null | grep -q "Linger=yes"; then
-        LINGER_STATUS="${FMT_OK} enabled"
-    elif [ -f "/var/lib/systemd/linger/$USER" ]; then
-        LINGER_STATUS="${FMT_OK} enabled"
-    else
-        LINGER_STATUS="${FMT_WARN} disabled"
-    fi
-fi
-echo -e "  Linger Enabled   : ${LINGER_STATUS}"
-if [[ "${LINGER_STATUS}" == *disabled* ]]; then
-    echo -e "  ${C_YELLOW}(Note: Enable linger to allow timer execution after logout/reboot: 'sudo loginctl enable-linger $USER')${C_RESET}"
-fi
-
-# 4. Latest Backup on Remote
-echo ""
-echo -e "${C_BOLD}[4] Latest Backup on Remote:${C_RESET}"
+echo -e "${C_BOLD}[4] Latest Cloud Backup:${C_RESET}"
 if [ -n "${LATEST_BACKUP}" ]; then
-    IFS=';' read -r b_time b_name b_size <<< "${LATEST_BACKUP}"
-    echo "  Filename         : ${b_name}"
+    b_time="$(echo "${LATEST_BACKUP}" | cut -d';' -f1)"
+    b_file="$(echo "${LATEST_BACKUP}" | cut -d';' -f2)"
+    b_size="$(echo "${LATEST_BACKUP}" | cut -d';' -f3)"
+    echo "  Filename         : ${b_file}"
     echo "  Timestamp        : ${b_time}"
-    echo "  Size             : ${b_size} bytes"
-elif [ "${IS_REACHABLE_RAW}" = true ]; then
-    echo "  No backups found on remote '${REMOTE}'."
+    echo "  Archive Size     : ${b_size} bytes"
 else
-    echo "  Cannot query remote backups (remote not reachable)."
-fi
-
-# 5. Summary & Recommended Actions
-echo ""
-echo -e "${C_CYAN}${C_BOLD}=====================================================================${C_RESET}"
-if [ "${HEALTH_OK}" = true ]; then
-    echo -e "${C_GREEN}${C_BOLD}OVERALL STATUS: HEALTHY${C_RESET}"
-    echo "Automatic backups are configured and the Google Drive remote is reachable."
-else
-    echo -e "${C_RED}${C_BOLD}OVERALL STATUS: ACTION REQUIRED${C_RESET}"
-    echo "Automatic backups may fail until the issues listed below are resolved."
-fi
-echo -e "${C_CYAN}${C_BOLD}=====================================================================${C_RESET}"
-
-if [ -z "${HERMES_RESOLVED}" ]; then
-    echo -e "${C_RED}* Install Hermes or add it to PATH / set HERMES_BIN=/path/to/hermes${C_RESET}"
-fi
-
-if [ "${IS_REACHABLE_RAW}" = false ]; then
-    echo -e "${C_RED}* Configure rclone remote by running: rclone config${C_RESET}"
-fi
-
-if [ "${UNITS_EXIST}" = false ] || [ "${TIMER_ENABLED_RAW}" = false ]; then
-    echo -e "${C_YELLOW}* Install and enable systemd timer by running: ./setup.sh${C_RESET}"
+    echo "  Filename         : None found"
 fi
 
 echo ""
-echo "Useful Commands for Troubleshooting:"
-echo -e "  Manual backup run  : ${C_CYAN}./backup.sh${C_RESET}"
-echo -e "  Test systemd service: ${C_CYAN}systemctl --user start hermes-cloud-backup.service${C_RESET}"
-echo -e "  View service logs  : ${C_CYAN}journalctl --user -u hermes-cloud-backup.service -n 100 --no-pager${C_RESET}"
-echo -e "  Uninstall timer    : ${C_CYAN}./uninstall.sh${C_RESET}"
-echo -e "  Check timer list   : ${C_CYAN}systemctl --user list-timers hermes-cloud-backup.timer${C_RESET}"
-echo -e "${C_CYAN}${C_BOLD}=====================================================================${C_RESET}"
-
 if [ "${HEALTH_OK}" = true ]; then
+    echo -e "${BADGE_OK} ${C_GREEN}${C_BOLD}Overall System Health: HEALTHY${C_RESET}"
     exit 0
 else
+    echo -e "${BADGE_ERR} ${C_RED}${C_BOLD}Overall System Health: ACTION REQUIRED${C_RESET}"
     exit 1
 fi

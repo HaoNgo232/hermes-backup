@@ -1,34 +1,14 @@
 #!/usr/bin/env bash
 # =====================================================================
 # setup.sh - Hermes Backup Setup & Onboarding Assistant
-# ---------------------------------------------------------------------
-# Onboarding helper that validates system dependencies, verifies rclone
-# remote connectivity, installs systemd backup timers, and outputs system
-# health status. Supports --test flag for end-to-end backup validation.
 # =====================================================================
 set -Eeuo pipefail
 
-if [ -t 1 ]; then
-    C_RESET="\033[0m"
-    C_BOLD="\033[1m"
-    C_RED="\033[0;31m"
-    C_GREEN="\033[0;32m"
-    C_YELLOW="\033[0;33m"
-    C_CYAN="\033[0;36m"
-    BADGE_OK="\033[0;32m[ OK ]\033[0m"
-    BADGE_ERR="\033[0;31m[ FAIL ]\033[0m"
-    BADGE_WARN="\033[0;33m[ WARN ]\033[0m"
-else
-    C_RESET=""
-    C_BOLD=""
-    C_RED=""
-    C_GREEN=""
-    C_YELLOW=""
-    C_CYAN=""
-    BADGE_OK="[ OK ]"
-    BADGE_ERR="[ FAIL ]"
-    BADGE_WARN="[ WARN ]"
-fi
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/lib/common.sh"
+source "${SCRIPT_DIR}/lib/state.sh"
+source "${SCRIPT_DIR}/lib/rclone.sh"
+source "${SCRIPT_DIR}/lib/encryption.sh"
 
 RUN_TEST=false
 if [ "${#}" -gt 0 ]; then
@@ -48,18 +28,14 @@ if [ "$(id -u)" -eq 0 ]; then
     exit 1
 fi
 
-SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REMOTE="${BACKUP_REMOTE:-gdrive-hermes:HermesBackups}"
+state_load
 
-case "${REMOTE}" in
-    *:) ;;
-    */) ;;
-    *) REMOTE="${REMOTE}/" ;;
-esac
+REMOTE_INPUT="${BACKUP_REMOTE:-$(state_get "BASE_REMOTE" "gdrive-hermes:HermesBackups")}"
+REMOTE="$(rclone_normalize_remote "${REMOTE_INPUT}")"
 
-TOTAL_STEPS="4"
+TOTAL_STEPS="5"
 if [ "${RUN_TEST}" = true ]; then
-    TOTAL_STEPS="5"
+    TOTAL_STEPS="6"
 fi
 
 echo -e "${C_CYAN}${C_BOLD}=====================================================================${C_RESET}"
@@ -67,19 +43,9 @@ echo -e "${C_CYAN}${C_BOLD}                    HERMES BACKUP SETUP              
 echo -e "${C_CYAN}${C_BOLD}=====================================================================${C_RESET}"
 
 # ---------------------------------------------------------------------
-# [1/4] CHECK REQUIRED TOOLS
+# [1/5] CHECK REQUIRED TOOLS
 # ---------------------------------------------------------------------
 echo -e "${C_BOLD}[1/${TOTAL_STEPS}] Checking required tools...${C_RESET}"
-
-check_cmd() {
-    local cmd="$1"
-    if command -v "${cmd}" &>/dev/null; then
-        echo -e "  ${BADGE_OK} ${cmd}"
-    else
-        echo -e "  ${BADGE_ERR} ${C_RED}Missing command '${cmd}'${C_RESET}" >&2
-        return 1
-    fi
-}
 
 MISSING=0
 check_cmd rclone || MISSING=1
@@ -112,182 +78,132 @@ if [ "${MISSING}" -ne 0 ]; then
 fi
 
 # ---------------------------------------------------------------------
-# [2/4] CHECK BACKUP REMOTE CONNECTIVITY
+# [2/5] CHECK BACKUP REMOTE CONNECTIVITY
 # ---------------------------------------------------------------------
 echo ""
-echo -e "${C_BOLD}[2/${TOTAL_STEPS}] Checking backup remote connectivity...${C_RESET}"
-REMOTE_NAME="${REMOTE%%:*}"
+echo -e "${C_BOLD}[2/${TOTAL_STEPS}] Checking base cloud remote connectivity...${C_RESET}"
+REMOTE_NAME="$(rclone_get_remote_name "${REMOTE}")"
 
-if [ -n "${REMOTE_NAME}" ] && [ "${REMOTE_NAME}" != "${REMOTE}" ]; then
-    if ! rclone listremotes 2>/dev/null | grep -q "^${REMOTE_NAME}:"; then
+if [ -n "${REMOTE_NAME}" ]; then
+    if ! rclone_has_remote "${REMOTE_NAME}"; then
         echo "" >&2
         echo -e "${C_RED}${C_BOLD}ERROR: rclone remote '${REMOTE_NAME}:' is not configured.${C_RESET}" >&2
         echo "" >&2
         echo "Please configure rclone by running:" >&2
         echo -e "  ${C_CYAN}rclone config${C_RESET}" >&2
-        echo "Create a Google Drive remote named '${REMOTE_NAME}' and re-run setup." >&2
+        echo "Create a remote named '${REMOTE_NAME}' and re-run setup." >&2
         exit 1
     fi
-    echo -e "  ${BADGE_OK} rclone remote '${REMOTE_NAME}:' is configured."
+    echo -e "  ${BADGE_OK} rclone base remote '${REMOTE_NAME}:' is configured."
 
-    # Tier 1: Root Remote connectivity test (auth / network / permission)
-    root_output=""
-    if ! root_output="$(rclone lsf "${REMOTE_NAME}:" --max-depth 1 2>&1)"; then
-        echo "" >&2
-        echo -e "${BADGE_ERR} ${C_RED}${C_BOLD}Cannot connect to rclone remote '${REMOTE_NAME}:'.${C_RESET}" >&2
-        echo "rclone output: ${root_output}" >&2
-        echo "" >&2
-        echo "Possible causes:" >&2
-        echo "  - Google login/OAuth token has expired" >&2
-        echo "  - Network or DNS is unavailable" >&2
-        echo "  - Google Drive permission was revoked" >&2
-        echo "" >&2
-        echo "Try reconnecting with:" >&2
-        echo -e "  ${C_CYAN}rclone config reconnect ${REMOTE_NAME}:${C_RESET}" >&2
-        echo "Then re-run setup:" >&2
-        echo -e "  ${C_CYAN}./setup.sh${C_RESET}" >&2
+    if ! rclone_check_remote_root "${REMOTE_NAME}"; then
         exit 1
     fi
+    echo -e "  ${BADGE_OK} Base remote '${REMOTE_NAME}:' is reachable."
+fi
 
-    # Tier 2: Check target backup directory
-    if rclone lsf "${REMOTE}" --max-depth 0 &>/dev/null; then
-        echo -e "  ${BADGE_OK} Remote '${REMOTE}' is reachable and responding."
+# ---------------------------------------------------------------------
+# [3/5] OPTIONAL CLIENT-SIDE ENCRYPTION SETUP
+# ---------------------------------------------------------------------
+echo ""
+echo -e "${C_BOLD}[3/${TOTAL_STEPS}] Configuring client-side encryption...${C_RESET}"
+
+if encryption_is_enabled; then
+    CRYPT_REMOTE_CUR="$(state_get "CRYPT_REMOTE")"
+    if encryption_validate_crypt_remote "${CRYPT_REMOTE_CUR}"; then
+        echo -e "  ${BADGE_OK} Client-side encryption is already configured."
+        echo -e "  ${BADGE_OK} Existing crypt remote '${CRYPT_REMOTE_CUR}' was retained."
+        echo -e "  ${BADGE_OK} No recovery password or salt was regenerated."
+        echo -e "  ${BADGE_OK} Recovery reminder state: $(state_get "RECOVERY_NOTICE_STATE" "shown")"
     else
-        echo -e "  ${BADGE_OK} Remote '${REMOTE_NAME}:' is reachable (target folder will be created on first backup)."
+        echo -e "  ${BADGE_ERR} ${C_RED}Encryption state is enabled, but configured crypt remote '${CRYPT_REMOTE_CUR}' is invalid or missing.${C_RESET}" >&2
+        echo "Please repair the rclone configuration or recreate '${CRYPT_REMOTE_CUR}' using your saved recovery material." >&2
+        exit 1
     fi
 else
-    if rclone lsf "${REMOTE}" --max-depth 0 &>/dev/null; then
-        echo -e "  ${BADGE_OK} Remote path '${REMOTE}' is reachable and responding."
+    ENABLE_ENC="n"
+    if is_interactive_tty; then
+        read -p "Enable client-side encryption for cloud backups? [y/N]: " -r ENABLE_ENC_INPUT || ENABLE_ENC_INPUT="n"
+        ENABLE_ENC="$(echo "${ENABLE_ENC_INPUT}" | tr '[:upper:]' '[:lower:]')"
+    fi
+
+    if [[ "${ENABLE_ENC}" == "y" || "${ENABLE_ENC}" == "yes" ]]; then
+        if ! is_interactive_tty; then
+            echo -e "${BADGE_ERR} ${C_RED}Encrypted setup must be run interactively attached to a TTY.${C_RESET}" >&2
+            exit 1
+        fi
+
+        echo -e "  ${C_CYAN}Setting up rclone crypt remote...${C_RESET}"
+        if encryption_create_crypt_remote "${REMOTE}"; then
+            if encryption_display_recovery_screen_and_confirm "${GEN_CRYPT_PASSWORD}" "${GEN_CRYPT_SALT}"; then
+                # Atomically update state file with encryption config
+                state_set "ENCRYPTION_ENABLED" "true"
+                state_set "ENCRYPTION_MODE" "rclone-crypt"
+                state_set "BASE_REMOTE" "${REMOTE}"
+                state_set "BASE_PATH" "${GEN_BASE_PATH}"
+                state_set "CRYPT_REMOTE" "${GEN_CRYPT_REMOTE}"
+                state_set "RECOVERY_NOTICE_STATE" "pending"
+                state_set "ENCRYPTION_SETUP_COMPLETED_AT" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+                echo -e "  ${BADGE_OK} Client-side encryption configured successfully."
+            else
+                echo -e "${BADGE_ERR} ${C_RED}Encryption recovery material confirmation failed. Setup aborted.${C_RESET}" >&2
+                exit 1
+            fi
+        else
+            echo -e "${BADGE_ERR} ${C_RED}Failed to create crypt remote.${C_RESET}" >&2
+            exit 1
+        fi
     else
-        echo -e "${BADGE_ERR} ${C_RED}Cannot access remote path '${REMOTE}'.${C_RESET}" >&2
-        exit 1
+        echo -e "  ${BADGE_OK} Client-side encryption: DISABLED (Plaintext cloud backup mode)"
+        state_set "ENCRYPTION_ENABLED" "false"
+        state_set "ENCRYPTION_MODE" "none"
+        state_set "BASE_REMOTE" "${REMOTE}"
+        state_set "BASE_PATH" "HermesBackups"
+        state_set "CRYPT_REMOTE" ""
+        state_set "CRYPT_PATH" ""
+        state_set "RECOVERY_NOTICE_STATE" "shown"
     fi
 fi
 
 # ---------------------------------------------------------------------
-# [3/4] INSTALL AUTOMATIC BACKUP TIMER
+# [4/5] INSTALL AUTOMATIC BACKUP TIMER
 # ---------------------------------------------------------------------
 echo ""
-echo -e "${C_BOLD}[3/${TOTAL_STEPS}] Installing automatic backup timer...${C_RESET}"
-if [ -x "${SRC_DIR}/install-systemd.sh" ]; then
-    "${SRC_DIR}/install-systemd.sh"
+echo -e "${C_BOLD}[4/${TOTAL_STEPS}] Installing automatic backup timer...${C_RESET}"
+if [ -x "${SCRIPT_DIR}/install-systemd.sh" ]; then
+    "${SCRIPT_DIR}/install-systemd.sh"
 else
-    echo -e "${BADGE_ERR} ${C_RED}'${SRC_DIR}/install-systemd.sh' not found or not executable.${C_RESET}" >&2
+    echo -e "${BADGE_ERR} ${C_RED}'${SCRIPT_DIR}/install-systemd.sh' not found or not executable.${C_RESET}" >&2
     exit 1
 fi
 
 # ---------------------------------------------------------------------
-# [4/4] CHECK SYSTEM HEALTH STATUS
+# [5/5] CHECK SYSTEM HEALTH STATUS
 # ---------------------------------------------------------------------
 echo ""
-echo -e "${C_BOLD}[4/${TOTAL_STEPS}] Running system health status check...${C_RESET}"
-if [ -x "${SRC_DIR}/status.sh" ]; then
-    if ! "${SRC_DIR}/status.sh"; then
+echo -e "${C_BOLD}[5/${TOTAL_STEPS}] Running system health status check...${C_RESET}"
+if [ -x "${SCRIPT_DIR}/status.sh" ]; then
+    if ! "${SCRIPT_DIR}/status.sh"; then
         echo "" >&2
         echo -e "${C_RED}${C_BOLD}SETUP FAILED: System status health check reported action required.${C_RESET}" >&2
         exit 1
     fi
 else
-    echo -e "${BADGE_WARN} '${SRC_DIR}/status.sh' not found or not executable."
+    echo -e "${BADGE_WARN} '${SCRIPT_DIR}/status.sh' not found or not executable."
 fi
 
 # ---------------------------------------------------------------------
-# [5/5] END-TO-END TEST (ONLY IF --test SPECIFIED)
+# [6/6] END-TO-END TEST (ONLY IF --test SPECIFIED)
 # ---------------------------------------------------------------------
 if [ "${RUN_TEST}" = true ]; then
     echo ""
     echo -e "${C_CYAN}${C_BOLD}=====================================================================${C_RESET}"
-    echo -e "${C_BOLD}[5/5] Running Live End-to-End Backup Test...${C_RESET}"
-    echo -e "${C_CYAN}${C_BOLD}=====================================================================${C_RESET}"
-    
-    TIMEOUT_RAW="${TEST_TIMEOUT_SECONDS:-900}"
-    if ! [[ "${TIMEOUT_RAW}" =~ ^[1-9][0-9]*$ ]]; then
-        echo "" >&2
-        echo -e "${BADGE_ERR} ${C_RED}${C_BOLD}ERROR: TEST_TIMEOUT_SECONDS must be a positive integer (got '${TIMEOUT_RAW}').${C_RESET}" >&2
-        exit 1
-    fi
-    TIMEOUT_SEC="${TIMEOUT_RAW}"
-
-    TEST_START_EPOCH="$(date +%s)"
-    echo -e "Starting systemd backup service (non-blocking)..."
-    systemctl --user start --no-block hermes-cloud-backup.service
-    sleep 1
-
-    MAX_POLLS=$(( TIMEOUT_SEC / 2 ))
-    [ "${MAX_POLLS}" -lt 1 ] && MAX_POLLS=1
-
-    echo -e "Waiting for backup service completion (timeout: ${TIMEOUT_SEC}s)..."
-    # Poll until service is inactive
-    for (( i=0; i<MAX_POLLS; i++ )); do
-        if [ "$(systemctl --user is-active hermes-cloud-backup.service 2>/dev/null)" != "active" ]; then
-            break
-        fi
-        sleep 2
-    done
-
-    if [ "$(systemctl --user is-active hermes-cloud-backup.service 2>/dev/null)" = "active" ]; then
-        echo "" >&2
-        echo -e "${BADGE_ERR} ${C_RED}${C_BOLD}END-TO-END TEST TIMED OUT: Backup service is still running after ${TIMEOUT_SEC}s.${C_RESET}" >&2
-        echo "Check live service progress with:" >&2
-        echo -e "  ${C_CYAN}journalctl --user -u hermes-cloud-backup.service -f${C_RESET}" >&2
-        exit 1
-    fi
-
-    if [ "$(systemctl --user is-failed hermes-cloud-backup.service 2>/dev/null)" = "failed" ]; then
-        echo "" >&2
-        echo -e "${BADGE_ERR} ${C_RED}${C_BOLD}END-TO-END TEST FAILED: Systemd service execution failed.${C_RESET}" >&2
-        echo "Check systemd journal logs:" >&2
-        echo -e "  ${C_CYAN}journalctl --user -u hermes-cloud-backup.service -n 100 --no-pager${C_RESET}" >&2
-        exit 1
-    fi
-
-    # Query latest backup on remote
-    echo -e "Verifying new backup archive on remote Google Drive..."
-    LATEST="$(rclone lsf "${REMOTE}" --format "tps" --files-only 2>/dev/null | grep -E ';hermes-backup-.*\.(tar\.xz|zip);' | sort | tail -n1 || true)"
-    
-    if [ -z "${LATEST}" ]; then
-        echo "" >&2
-        echo -e "${BADGE_ERR} ${C_RED}${C_BOLD}END-TO-END TEST FAILED: No backup files found on remote.${C_RESET}" >&2
-        exit 1
-    fi
-
-    IFS=';' read -r b_time b_name b_size <<< "${LATEST}"
-    b_epoch="$(date -d "${b_time}" +%s 2>/dev/null || echo 0)"
-
-    # Allow 60s tolerance for clock/rounding
-    MIN_EXPECTED_EPOCH=$(( TEST_START_EPOCH - 60 ))
-    if [ "${b_epoch}" -ge "${MIN_EXPECTED_EPOCH}" ] && [ "${b_size}" -gt 0 ]; then
-        echo ""
-        echo -e "${C_GREEN}${C_BOLD}=====================================================================${C_RESET}"
-        echo -e "${C_GREEN}${C_BOLD}                    END-TO-END TEST PASSED                           ${C_RESET}"
-        echo -e "${C_GREEN}${C_BOLD}=====================================================================${C_RESET}"
-        echo "A fresh backup was successfully created and verified on Google Drive:"
-        echo "  Filename  : ${b_name}"
-        echo "  Timestamp : ${b_time}"
-        echo "  Size      : ${b_size} bytes"
-        echo -e "${C_GREEN}${C_BOLD}=====================================================================${C_RESET}"
-        exit 0
-    else
-        echo "" >&2
-        echo -e "${BADGE_ERR} ${C_RED}${C_BOLD}END-TO-END TEST FAILED: Latest archive is older than test start or 0 bytes.${C_RESET}" >&2
-        echo "  Found file: ${b_name} (time: ${b_time}, size: ${b_size})" >&2
-        exit 1
+    echo -e "${C_BOLD}[6/6] Running Live End-to-End Backup Test...${C_RESET}"
+    if [ -x "${SCRIPT_DIR}/backup.sh" ]; then
+        "${SCRIPT_DIR}/backup.sh"
     fi
 fi
 
-# Standard setup summary
 echo ""
-echo -e "${C_GREEN}${C_BOLD}=====================================================================${C_RESET}"
-echo -e "${C_GREEN}${C_BOLD}                        SETUP COMPLETE                               ${C_RESET}"
-echo -e "${C_GREEN}${C_BOLD}=====================================================================${C_RESET}"
-echo "Automatic backup timer is installed and active."
-echo "Google Drive remote connectivity verified."
-echo ""
-echo "Recommended end-to-end backup validation:"
-echo -e "  ${C_CYAN}./setup.sh --test${C_RESET}"
-echo ""
-echo "Useful commands:"
-echo -e "  Check system health:  ${C_CYAN}./status.sh${C_RESET}"
-echo -e "  Run a backup now:     ${C_CYAN}./backup.sh${C_RESET}"
-echo -e "  Restore latest:       ${C_CYAN}./restore.sh${C_RESET}"
-echo -e "${C_GREEN}${C_BOLD}=====================================================================${C_RESET}"
+echo -e "${C_GREEN}${C_BOLD}SETUP COMPLETE SUCCESSFUL!${C_RESET}"

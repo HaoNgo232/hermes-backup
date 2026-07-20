@@ -1,39 +1,19 @@
 #!/usr/bin/env bash
 # =====================================================================
 # install-systemd.sh - Enable the Hermes cloud backup timer (user unit)
-# ---------------------------------------------------------------------
-# Safe: only touches ~/.config/systemd/user, never root, never sudo.
-# Idempotent: can be re-run safely.
 # =====================================================================
 set -Eeuo pipefail
 umask 077
 
-if [ -t 1 ]; then
-    C_RESET="\033[0m"
-    C_BOLD="\033[1m"
-    C_RED="\033[0;31m"
-    C_GREEN="\033[0;32m"
-    C_YELLOW="\033[0;33m"
-    C_CYAN="\033[0;36m"
-    FMT_OK="\033[0;32m[ OK ]\033[0m"
-    FMT_WARN="\033[0;33m[ WARN ]\033[0m"
-else
-    C_RESET=""
-    C_BOLD=""
-    C_RED=""
-    C_GREEN=""
-    C_YELLOW=""
-    C_CYAN=""
-    FMT_OK="[ OK ]"
-    FMT_WARN="[ WARN ]"
-fi
+SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SRC_DIR}/lib/common.sh"
+source "${SRC_DIR}/lib/state.sh"
 
 if [ "$(id -u)" -eq 0 ]; then
     echo -e "${C_RED}ERROR: Refusing to run as root. Run as regular user.${C_RESET}" >&2
     exit 1
 fi
 
-SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 UNIT_DIR="${HOME}/.config/systemd/user"
 SERVICE="hermes-cloud-backup.service"
 TIMER="hermes-cloud-backup.timer"
@@ -99,20 +79,19 @@ REPO_DIR_ESC="$(escape_sed "${SRC_DIR}")"
 HERMES_BIN_ESC="$(escape_sed "${HERMES_RESOLVED}")"
 PATH_ESC="$(escape_sed "${EXPLICIT_PATH}")"
 
-# Render service unit
-sed -e "s/@REPO_DIR@/${REPO_DIR_ESC}/g" \
+# Render service unit atomically
+rendered_svc="$(sed -e "s/@REPO_DIR@/${REPO_DIR_ESC}/g" \
     -e "s/@HERMES_BIN@/${HERMES_BIN_ESC}/g" \
     -e "s/@PATH@/${PATH_ESC}/g" \
-    "${SRC_DIR}/systemd/${SERVICE}" > "${UNIT_DIR}/${SERVICE}"
-chmod 644 "${UNIT_DIR}/${SERVICE}"
+    "${SRC_DIR}/systemd/${SERVICE}")"
+atomic_write_file "${UNIT_DIR}/${SERVICE}" "${rendered_svc}" 0644
 
-# Render timer unit
-sed -e "s/@REPO_DIR@/${REPO_DIR_ESC}/g" \
-    "${SRC_DIR}/systemd/${TIMER}" > "${UNIT_DIR}/${TIMER}"
-chmod 644 "${UNIT_DIR}/${TIMER}"
+# Render timer unit atomically
+rendered_timer="$(sed -e "s/@REPO_DIR@/${REPO_DIR_ESC}/g" "${SRC_DIR}/systemd/${TIMER}")"
+atomic_write_file "${UNIT_DIR}/${TIMER}" "${rendered_timer}" 0644
 
-echo -e "  ${FMT_OK} Installed service: ${UNIT_DIR}/${SERVICE}"
-echo -e "  ${FMT_OK} Installed timer:   ${UNIT_DIR}/${TIMER}"
+echo -e "  ${BADGE_OK} Installed service: ${UNIT_DIR}/${SERVICE}"
+echo -e "  ${BADGE_OK} Installed timer:   ${UNIT_DIR}/${TIMER}"
 
 # ---------------------------------------------------------------------
 # DAEMON RELOAD AND ACTIVATE
@@ -135,7 +114,7 @@ if [ "${IS_ENABLED}" = "enabled" ] && [ "${IS_ACTIVE}" = "active" ]; then
     echo "Next trigger  :"
     systemctl --user list-timers "${TIMER}" --no-pager || true
 else
-    echo -e "${FMT_WARN} ${C_YELLOW}Timer installation finished but timer state is enabled=${IS_ENABLED}, active=${IS_ACTIVE}.${C_RESET}" >&2
+    echo -e "${BADGE_WARN} ${C_YELLOW}Timer installation finished but timer state is enabled=${IS_ENABLED}, active=${IS_ACTIVE}.${C_RESET}" >&2
     exit 1
 fi
 

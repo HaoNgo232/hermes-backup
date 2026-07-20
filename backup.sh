@@ -1,110 +1,16 @@
 #!/usr/bin/env bash
 # =====================================================================
-# Hermes Backup Script (Super Compression tar.xz)
-# Automatically creates a backup with 'hermes backup', super-compresses
-# with xz (-9e), and uploads it to Google Drive.
-# Old backups are removed according to GFS (Grandfather-Father-Son).
+# Hermes Backup Script (Super Compression tar.xz + Optional Encryption)
 # =====================================================================
-set -euo pipefail
+set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-LOG_DIR="${BACKUP_LOG_DIR:-${SCRIPT_DIR}/logs}"
-mkdir -p "${LOG_DIR}"
-LOG_FILE="${LOG_DIR}/backup.log"
+source "${SCRIPT_DIR}/lib/common.sh"
+source "${SCRIPT_DIR}/lib/state.sh"
+source "${SCRIPT_DIR}/lib/rclone.sh"
+source "${SCRIPT_DIR}/lib/encryption.sh"
 
-# ---------------------------------------------------------------------
-# LOGGING & COLOR FORMATTING UTILITY
-# ---------------------------------------------------------------------
-if [ -t 1 ]; then
-    C_RESET="\033[0m"
-    C_BOLD="\033[1m"
-    C_RED="\033[0;31m"
-    C_GREEN="\033[0;32m"
-    C_YELLOW="\033[0;33m"
-    C_BLUE="\033[0;34m"
-    C_CYAN="\033[0;36m"
-    ICON_OK="✔"
-    ICON_ERR="✖"
-    ICON_WARN="⚠"
-    ICON_INFO="ℹ"
-    ICON_STEP="➜"
-else
-    C_RESET=""
-    C_BOLD=""
-    C_RED=""
-    C_GREEN=""
-    C_YELLOW=""
-    C_BLUE=""
-    C_CYAN=""
-    ICON_OK="[OK]"
-    ICON_ERR="[ERR]"
-    ICON_WARN="[WARN]"
-    ICON_INFO="[INFO]"
-    ICON_STEP="[STEP]"
-fi
-
-strip_ansi() {
-    sed -E 's/\x1B\[[0-9;]*[a-zA-Z]//g'
-}
-
-log_raw() {
-    local timestamp
-    timestamp="$(date '+%Y-%m-%d %H:%M:%S')"
-    echo -e "${timestamp} - $*"
-    if [ -n "${LOG_FILE:-}" ]; then
-        echo -e "${timestamp} - $*" | strip_ansi >> "${LOG_FILE}"
-    fi
-}
-
-rotate_log_file() {
-    local max_lines="${MAX_LOG_LINES:-5000}"
-    local keep_lines="${KEEP_LOG_LINES:-2000}"
-    if [ -f "${LOG_FILE:-}" ]; then
-        local current_lines
-        current_lines=$(wc -l < "${LOG_FILE}" 2>/dev/null || echo 0)
-        if [ "${current_lines}" -gt "${max_lines}" ]; then
-            local tmp_log="${LOG_FILE}.tmp"
-            echo "$(date '+%Y-%m-%d %H:%M:%S') - [INFO] Log file exceeded ${max_lines} lines (${current_lines} lines). Truncating to last ${keep_lines} lines." > "${tmp_log}"
-            tail -n "${keep_lines}" "${LOG_FILE}" >> "${tmp_log}"
-            mv "${tmp_log}" "${LOG_FILE}"
-        fi
-    fi
-}
-
-log_info() {
-    log_raw "${C_BLUE}${ICON_INFO}${C_RESET} $*"
-}
-
-log_success() {
-    log_raw "${C_GREEN}${ICON_OK}${C_RESET} ${C_GREEN}$*${C_RESET}"
-}
-
-log_warn() {
-    log_raw "${C_YELLOW}${ICON_WARN}${C_RESET} ${C_YELLOW}$*${C_RESET}"
-}
-
-log_error() {
-    log_raw "${C_RED}${ICON_ERR}${C_RESET} ${C_RED}$*${C_RESET}"
-}
-
-log_step() {
-    log_raw "${C_CYAN}${C_BOLD}${ICON_STEP} $*${C_RESET}"
-}
-
-# ---------------------------------------------------------------------
-# CONFIGURATION
-# ---------------------------------------------------------------------
-REMOTE="${BACKUP_REMOTE:-gdrive-hermes:HermesBackups}"
-
-case "${REMOTE}" in
-    *:) ;;
-    */) ;;
-    *) REMOTE="${REMOTE}/" ;;
-esac
-
-# Timestamp format: DD-MM-YYYY_HHhMMpSSs (example: 20-07-2026_14h47p55s)
-TIMESTAMP="$(date +%d-%m-%Y_%Hh%Mp%Ss)"
-ARCHIVE_NAME="hermes-backup-${TIMESTAMP}.tar.xz"
+rotate_log_file
 
 # Lock file setup
 if [ -n "${XDG_RUNTIME_DIR:-}" ] && [ -d "${XDG_RUNTIME_DIR}" ]; then
@@ -114,7 +20,9 @@ else
 fi
 LOCK_FILE="${BACKUP_LOCK_FILE:-${DEFAULT_LOCK}}"
 
-# Isolated temporary workspace
+acquire_backup_lock "${LOCK_FILE}"
+
+# Temporary workspace
 WORKSPACE=""
 cleanup() {
     if [ -n "${WORKSPACE}" ] && [ -d "${WORKSPACE}" ]; then
@@ -124,17 +32,8 @@ cleanup() {
 trap cleanup EXIT
 
 # ---------------------------------------------------------------------
-# PREFLIGHT CHECKS & LOCKING
+# PREFLIGHT & ENCRYPTION DESTINATION RESOLUTION
 # ---------------------------------------------------------------------
-require_command() {
-    local cmd="$1"
-    if ! command -v "${cmd}" &>/dev/null; then
-        log_error "Missing required command: '${cmd}'"
-        log_error "Please install '${cmd}' and try again."
-        exit 1
-    fi
-}
-
 preflight_backup() {
     require_command rclone
     require_command unzip
@@ -158,18 +57,9 @@ preflight_backup() {
     fi
     log_info "Using Hermes binary: ${HERMES_RESOLVED}"
 
-    # Verify rclone remote config exists
-    local remote_config_name
-    remote_config_name="${REMOTE%%:*}"
-    if [ -n "${remote_config_name}" ] && [ "${remote_config_name}" != "${REMOTE}" ]; then
-        if ! rclone listremotes 2>/dev/null | grep -q "^${remote_config_name}:"; then
-            log_error "rclone remote '${remote_config_name}:' is not configured."
-            log_error "Run 'rclone config' to setup the remote '${remote_config_name}'."
-            exit 1
-        fi
-    fi
-
-    log_success "Preflight checks passed."
+    # Resolve active destination (Plaintext vs Encrypted)
+    DESTINATION="$(encryption_get_active_destination)"
+    log_info "Resolved active backup destination: ${DESTINATION}"
 }
 
 check_timer_warning() {
@@ -183,193 +73,161 @@ check_timer_warning() {
     fi
 }
 
-acquire_lock() {
-    exec 9>"${LOCK_FILE}"
-    if ! flock -n 9; then
-        log_info "Another backup is already running; skipping this run."
-        exit 0
-    fi
-}
-
 # ---------------------------------------------------------------------
 # GFS CLEANUP (Grandfather-Father-Son)
 # Keep: all ≤2 days | 1/day ≤7 days | 1/week ≤4 weeks | 1/month ≤3 months
 # ---------------------------------------------------------------------
 cleanup_gfs() {
-    log_info "Scanning remote for GFS retention cleanup..."
+    local target_dest="$1"
+    log_info "Scanning destination (${target_dest}) for GFS retention cleanup..."
     local now_epoch
-    now_epoch=$(date +%s)
+    now_epoch="$(date +%s)"
 
-    local -A daily_seen=()
-    local -A weekly_seen=()
-    local -A monthly_seen=()
-    local kept=0
-    local deleted=0
-    local cleanup_had_errors=false
+    local file_list
+    file_list="$(rclone_list_backups "${target_dest}")"
 
-    local list_output
-    if ! list_output="$(rclone lsf "${REMOTE}" --format "tp" --files-only 2>&1)"; then
-        log_error "GFS listing failed; no deletion was attempted."
-        log_error "rclone output: ${list_output}"
-        return 1
-    fi
-
-    local filtered_list
-    filtered_list="$(echo "${list_output}" | grep -E ';hermes-backup-.*\.(tar\.xz|zip)$' | sort -r || true)"
-
-    if [ -z "${filtered_list}" ]; then
-        log_info "GFS cleanup: No existing backup files found on remote."
+    if [ -z "${file_list}" ]; then
+        log_info "No previous backups found for GFS evaluation."
         return 0
     fi
 
-    while IFS=';' read -r timestamp filename; do
-        [ -z "${filename}" ] && continue
+    declare -A daily_map=()
+    declare -A weekly_map=()
+    declare -A monthly_map=()
+    local -a to_delete=()
+
+    while IFS=; read -r line || [ -n "${line}" ]; do
+        [ -z "${line}" ] && continue
+
+        local file_time_str file_name
+        file_time_str="$(echo "${line}" | cut -d';' -f1)"
+        file_name="$(echo "${line}" | cut -d';' -f2-)"
 
         local file_epoch
-        file_epoch=$(date -d "${timestamp}" +%s 2>/dev/null) || continue
+        file_epoch="$(date -d "${file_time_str}" +%s 2>/dev/null || date -j -f "%Y-%m-%dT%H:%M:%S" "${file_time_str%%.*}" +%s 2>/dev/null || echo 0)"
+
+        if [ "${file_epoch}" -eq 0 ]; then
+            continue
+        fi
+
         local age_days=$(( (now_epoch - file_epoch) / 86400 ))
 
+        # Tier 1: <= 2 days -> Keep ALL
         if [ "${age_days}" -le 2 ]; then
-            kept=$((kept + 1))
-
-        elif [ "${age_days}" -le 7 ]; then
-            local day_key
-            day_key=$(date -d "${timestamp}" +%Y-%m-%d)
-            if [ -z "${daily_seen[${day_key}]:-}" ]; then
-                daily_seen["${day_key}"]=1
-                kept=$((kept + 1))
-            else
-                log_info "Deleting (daily): ${filename}"
-                if rclone deletefile "${REMOTE}${filename}"; then
-                    deleted=$((deleted + 1))
-                else
-                    log_error "Failed to delete remote file: ${filename}"
-                    cleanup_had_errors=true
-                fi
-            fi
-
-        elif [ "${age_days}" -le 28 ]; then
-            local week_key
-            week_key=$(date -d "${timestamp}" +%G-W%V)
-            if [ -z "${weekly_seen[${week_key}]:-}" ]; then
-                weekly_seen["${week_key}"]=1
-                kept=$((kept + 1))
-            else
-                log_info "Deleting (weekly): ${filename}"
-                if rclone deletefile "${REMOTE}${filename}"; then
-                    deleted=$((deleted + 1))
-                else
-                    log_error "Failed to delete remote file: ${filename}"
-                    cleanup_had_errors=true
-                fi
-            fi
-
-        elif [ "${age_days}" -le 90 ]; then
-            local month_key
-            month_key=$(date -d "${timestamp}" +%Y-%m)
-            if [ -z "${monthly_seen[${month_key}]:-}" ]; then
-                monthly_seen["${month_key}"]=1
-                kept=$((kept + 1))
-            else
-                log_info "Deleting (monthly): ${filename}"
-                if rclone deletefile "${REMOTE}${filename}"; then
-                    deleted=$((deleted + 1))
-                else
-                    log_error "Failed to delete remote file: ${filename}"
-                    cleanup_had_errors=true
-                fi
-            fi
-
-        else
-            log_info "Deleting (>90 days): ${filename}"
-            if rclone deletefile "${REMOTE}${filename}"; then
-                deleted=$((deleted + 1))
-            else
-                log_error "Failed to delete remote file: ${filename}"
-                cleanup_had_errors=true
-            fi
+            continue
         fi
-    done <<< "${filtered_list}"
 
-    if [ "${cleanup_had_errors}" = true ]; then
-        log_warn "GFS cleanup finished with errors: kept ${kept} backups, deleted ${deleted} backups."
-        return 1
-    else
-        log_success "GFS cleanup complete: kept ${kept} backups, deleted ${deleted} backups."
+        # Tier 2: 3 to 7 days -> Keep 1 per day (latest of day)
+        if [ "${age_days}" -le 7 ]; then
+            local day_key
+            day_key="$(date -d "@${file_epoch}" +%Y-%m-%d 2>/dev/null || echo "")"
+            if [ -n "${day_key}" ]; then
+                if [ -n "${daily_map[${day_key}]:-}" ]; then
+                    to_delete+=("${daily_map[${day_key}]}")
+                fi
+                daily_map["${day_key}"]="${file_name}"
+            fi
+            continue
+        fi
+
+        # Tier 3: 8 to 28 days -> Keep 1 per week (latest of week)
+        if [ "${age_days}" -le 28 ]; then
+            local week_key
+            week_key="$(date -d "@${file_epoch}" +%Y-%V 2>/dev/null || echo "")"
+            if [ -n "${week_key}" ]; then
+                if [ -n "${weekly_map[${week_key}]:-}" ]; then
+                    to_delete+=("${weekly_map[${week_key}]}")
+                fi
+                weekly_map["${week_key}"]="${file_name}"
+            fi
+            continue
+        fi
+
+        # Tier 4: 29 to 90 days -> Keep 1 per month (latest of month)
+        if [ "${age_days}" -le 90 ]; then
+            local month_key
+            month_key="$(date -d "@${file_epoch}" +%Y-%m 2>/dev/null || echo "")"
+            if [ -n "${month_key}" ]; then
+                if [ -n "${monthly_map[${month_key}]:-}" ]; then
+                    to_delete+=("${monthly_map[${month_key}]}")
+                fi
+                monthly_map["${month_key}"]="${file_name}"
+            fi
+            continue
+        fi
+
+        # Tier 5: > 90 days -> Delete
+        to_delete+=("${file_name}")
+
+    done <<< "${file_list}"
+
+    if [ "${#to_delete[@]}" -eq 0 ]; then
+        log_info "GFS retention check completed. No old backups require deletion."
         return 0
     fi
+
+    log_info "GFS retention: Pruning ${#to_delete[@]} old archive(s)..."
+    for old_file in "${to_delete[@]}"; do
+        log_info "Deleting old archive: ${old_file}"
+        rclone_delete_remote_file "${target_dest}${old_file}"
+    done
+    log_success "GFS retention pruning finished."
 }
 
-# =====================================================================
-# MAIN EXECUTION
-# =====================================================================
-rotate_log_file
-log_step "[1/4] Preflight checks & acquiring lock..."
-preflight_backup
-acquire_lock
+# ---------------------------------------------------------------------
+# MAIN BACKUP EXECUTION
+# ---------------------------------------------------------------------
+log_step "Starting Hermes Backup Workflow..."
 check_timer_warning
+preflight_backup
+
+# Show single-time recovery reminder if state is pending
+encryption_show_first_backup_reminder_if_needed
+
+TIMESTAMP="$(date +%d-%m-%Y_%Hh%Mp%Ss)"
+ARCHIVE_NAME="hermes-backup-${TIMESTAMP}.tar.xz"
 
 WORKSPACE="$(mktemp -d "${TMPDIR:-/tmp}/hermes-backup-XXXXXX")"
-TMP_ORIG="${WORKSPACE}/orig.zip"
-TMP_DIR="${WORKSPACE}/extract"
+TMP_ZIP="${WORKSPACE}/hermes-raw-backup.zip"
+TMP_EXTRACT="${WORKSPACE}/extract"
 TMP_XZ="${WORKSPACE}/${ARCHIVE_NAME}"
 
-# Step 2: Snapshot & Compression
-log_step "[2/4] Creating Hermes backup & super-compressing..."
-log_info "Running '${HERMES_RESOLVED} backup'..."
-hermes_out="$("${HERMES_RESOLVED}" backup -o "${TMP_ORIG}" 2>&1)" || {
-    log_error "Hermes backup failed with output:"
-    log_error "${hermes_out}"
-    exit 1
-}
+log_step "[1/4] Generating raw Hermes export..."
+"${HERMES_RESOLVED}" export --output "${TMP_ZIP}"
 
-# Filter out confusing 'Restore with:' line emitted by hermes binary
-echo "${hermes_out}" | grep -v -i "Restore with:" | while IFS= read -r line || [ -n "${line}" ]; do
-    log_info "${line}"
-done || true
-
-if [ ! -f "${TMP_ORIG}" ]; then
-    log_error "Hermes backup output file was not created at ${TMP_ORIG}"
+if [ ! -f "${TMP_ZIP}" ]; then
+    log_error "Hermes export failed: file ${TMP_ZIP} was not created."
     exit 1
 fi
 
-log_info "Super-compressing to .tar.xz (level 9)..."
-mkdir -p "${TMP_DIR}"
-unzip -q -o "${TMP_ORIG}" -d "${TMP_DIR}"
-tar -cf - -C "${TMP_DIR}" . | xz -9e -c > "${TMP_XZ}"
+raw_zip_bytes=$(stat -c%s "${TMP_ZIP}" 2>/dev/null || du -b "${TMP_ZIP}" | cut -f1)
+log_success "Raw ZIP archive created successfully (${raw_zip_bytes} bytes)."
 
-orig_size=$(du -h "${TMP_ORIG}" | cut -f1)
-xz_size=$(du -h "${TMP_XZ}" | cut -f1)
-local_bytes=$(stat -c%s "${TMP_XZ}" 2>/dev/null || du -b "${TMP_XZ}" | cut -f1)
-log_success "Super-compression complete: ${orig_size} -> ${xz_size} (${local_bytes} bytes)"
+log_step "[2/4] Decompressing and super-compressing to .tar.xz (-9e)..."
+mkdir -p "${TMP_EXTRACT}"
+unzip -q "${TMP_ZIP}" -d "${TMP_EXTRACT}"
+(cd "${TMP_EXTRACT}" && tar -cf - . | xz -9e -c > "${TMP_XZ}")
 
-# Step 3: Upload & Verification
-log_step "[3/4] Uploading to Google Drive & verifying..."
-log_info "Uploading ${ARCHIVE_NAME} to ${REMOTE}..."
-if ! rclone copyto "${TMP_XZ}" "${REMOTE}${ARCHIVE_NAME}"; then
-    log_error "Upload command failed for ${ARCHIVE_NAME}"
+if [ ! -f "${TMP_XZ}" ]; then
+    log_error "Compression failed: ${TMP_XZ} was not created."
     exit 1
 fi
 
-log_info "Verifying remote file size..."
-remote_bytes="$(rclone lsf "${REMOTE}${ARCHIVE_NAME}" --format "s" 2>/dev/null | tr -d '[:space:]' || true)"
+xz_bytes=$(stat -c%s "${TMP_XZ}" 2>/dev/null || du -b "${TMP_XZ}" | cut -f1)
+log_success "Super-compressed .tar.xz archive created successfully (${xz_bytes} bytes)."
 
-if [ -z "${remote_bytes}" ] || ! [[ "${remote_bytes}" =~ ^[0-9]+$ ]] || [ "${remote_bytes}" -le 0 ]; then
-    log_error "Upload completed but remote verification failed for ${REMOTE}${ARCHIVE_NAME} (remote size: '${remote_bytes}')"
+log_step "[3/4] Uploading archive to destination (${DESTINATION})..."
+TARGET_REMOTE_FILE="${DESTINATION}${ARCHIVE_NAME}"
+rclone_copy_file "${TMP_XZ}" "${TARGET_REMOTE_FILE}"
+
+log_step "Verifying remote upload integrity..."
+if ! rclone_verify_object "${TARGET_REMOTE_FILE}"; then
+    log_error "Remote verification failed: '${TARGET_REMOTE_FILE}' missing or empty on remote."
     exit 1
 fi
+log_success "Remote file upload verified."
 
-log_success "Upload verified on remote: ${REMOTE}${ARCHIVE_NAME} (${remote_bytes} bytes)"
+log_step "[4/4] Executing GFS retention cleanup..."
+cleanup_gfs "${DESTINATION}"
 
-# Step 4: GFS Retention Cleanup
-log_step "[4/4] Running GFS retention cleanup..."
-cleanup_status=0
-cleanup_gfs || cleanup_status=$?
-
-if [ ${cleanup_status} -eq 0 ]; then
-    log_success "Backup completed successfully!"
-    exit 0
-else
-    log_warn "Upload succeeded, but GFS cleanup encountered errors."
-    exit 1
-fi
+log_success "Hermes backup completed successfully!"

@@ -1,6 +1,6 @@
 # Hermes Backup to Google Drive
 
-Automated workflow script to back up, super-compress, and restore your [Hermes Agent](https://github.com/NousResearch/hermes-agent) data to Google Drive with Systemd timer scheduling and Grandfather-Father-Son (GFS) retention.
+Automated workflow script to back up, super-compress, and restore your [Hermes Agent](https://github.com/NousResearch/hermes-agent) data to Google Drive with Systemd timer scheduling, Grandfather-Father-Son (GFS) retention, and optional client-side encryption.
 
 ---
 
@@ -73,6 +73,28 @@ Backups will run automatically **every 4 hours** (02:00, 06:00, 10:00, 14:00, 18
 | **View recent backup log**           | `tail -n 100 logs/backup.log`                                        | View local log output of `backup.sh` |
 | **View systemd service logs**        | `journalctl --user -u hermes-cloud-backup.service -n 100 --no-pager` | View systemd service journal logs    |
 | **Test systemd service immediately** | `systemctl --user start hermes-cloud-backup.service`                 | Trigger the systemd service manually |
+
+---
+
+## Optional Client-Side Encryption
+
+Client-side encryption for cloud backups is optional and disabled by default.
+
+1. **Backend:** Uses `rclone crypt` layered over your primary cloud remote (`gdrive-hermes:`).
+2. **Confidentiality:** Archives, raw file contents, and directory/filenames are encrypted locally before uploading to Google Drive.
+3. **Unattended Operation:** Normal automated backups (`./backup.sh`) and restores (`./restore.sh`) remain fully unattended using operational credentials stored in local `rclone.conf`.
+4. **Recovery Material:** Generated recovery password and recovery salt are displayed ONLY ONCE during interactive `./setup.sh`.
+5. **Secure Storage:** Users must save BOTH the recovery password and recovery salt in a password manager or offline secure storage independent from the VPS/computer and cloud storage account.
+6. **Do NOT Store Secrets in Cloud:** Never save recovery material in the same cloud storage folder or account as the backups.
+7. **Loss of Recovery Material:** If both the local machine/rclone configuration and the saved recovery material are lost, encrypted cloud backups CANNOT be recovered.
+8. **Cloud Management:** Do not rename or manipulate encrypted cloud files manually through the Google Drive UI.
+9. **Retention & Deletion:** Encryption protects data confidentiality; it does not protect against deletion of cloud backups. GFS retention schedule applies to encrypted backups.
+
+### Threat Model Notice
+
+Encryption protects cloud backup confidentiality if an unauthorized entity accesses your cloud-storage files without having access to your local `rclone` crypt configuration or independently saved recovery material.
+
+Encryption does not fully protect against compromise of the local VPS/user account that runs automatic backups, because that machine must maintain local `rclone` credentials to perform unattended backups.
 
 ---
 
