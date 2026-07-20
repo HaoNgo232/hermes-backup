@@ -62,23 +62,29 @@ REMOTE_NAME="${REMOTE%%:*}"
 
 if command -v rclone &>/dev/null; then
     RCLONE_OK=true
-    if [ -n "${REMOTE_NAME}" ] && [ "${REMOTE_NAME}" != "${REMOTE}" ] && ! rclone listremotes 2>/dev/null | grep -q "^${REMOTE_NAME}:"; then
-        REMOTE_REACHABLE_TEXT="${FMT_ERR} no (remote '${REMOTE_NAME}:' not configured in rclone)"
-        IS_REACHABLE_RAW=false
+    if [ -n "${REMOTE_NAME}" ] && [ "${REMOTE_NAME}" != "${REMOTE}" ]; then
+        if ! rclone listremotes 2>/dev/null | grep -q "^${REMOTE_NAME}:"; then
+            REMOTE_REACHABLE_TEXT="${FMT_ERR} no (remote '${REMOTE_NAME}:' not configured in rclone)"
+            IS_REACHABLE_RAW=false
+        elif ! rclone lsf "${REMOTE_NAME}:" --max-depth 1 &>/dev/null; then
+            REMOTE_REACHABLE_TEXT="${FMT_ERR} no (cannot connect to remote '${REMOTE_NAME}:')"
+            IS_REACHABLE_RAW=false
+        else
+            if rclone lsf "${REMOTE}" --max-depth 0 &>/dev/null; then
+                REMOTE_REACHABLE_TEXT="${FMT_OK} yes"
+                IS_REACHABLE_RAW=true
+            else
+                REMOTE_REACHABLE_TEXT="${FMT_OK} yes (remote reachable; target folder will be created on upload)"
+                IS_REACHABLE_RAW=true
+            fi
+        fi
     else
-        lsf_err=""
         if rclone lsf "${REMOTE}" --max-depth 0 &>/dev/null; then
             REMOTE_REACHABLE_TEXT="${FMT_OK} yes"
             IS_REACHABLE_RAW=true
         else
-            lsf_err="$(rclone lsf "${REMOTE}" --max-depth 0 2>&1 || true)"
-            if echo "${lsf_err}" | grep -iq -E "(directory not found|folder not found|not found)"; then
-                REMOTE_REACHABLE_TEXT="${FMT_OK} yes (remote exists, target folder will be created on upload)"
-                IS_REACHABLE_RAW=true
-            else
-                REMOTE_REACHABLE_TEXT="${FMT_ERR} no (cannot access remote '${REMOTE_NAME}:')"
-                IS_REACHABLE_RAW=false
-            fi
+            REMOTE_REACHABLE_TEXT="${FMT_ERR} no (cannot access remote path '${REMOTE}')"
+            IS_REACHABLE_RAW=false
         fi
     fi
 else

@@ -129,27 +129,39 @@ if [ -n "${REMOTE_NAME}" ] && [ "${REMOTE_NAME}" != "${REMOTE}" ]; then
         exit 1
     fi
     echo -e "  ${BADGE_OK} rclone remote '${REMOTE_NAME}:' is configured."
-fi
 
-# Real connectivity test
-lsf_output=""
-if lsf_output="$(rclone lsf "${REMOTE}" --max-depth 0 2>&1)"; then
-    echo -e "  ${BADGE_OK} Remote '${REMOTE}' is reachable and responding."
+    # Tier 1: Root Remote connectivity test (auth / network / permission)
+    root_output=""
+    if ! root_output="$(rclone lsf "${REMOTE_NAME}:" --max-depth 1 2>&1)"; then
+        echo "" >&2
+        echo -e "${BADGE_ERR} ${C_RED}${C_BOLD}Cannot connect to rclone remote '${REMOTE_NAME}:'.${C_RESET}" >&2
+        echo "rclone output: ${root_output}" >&2
+        echo "" >&2
+        echo "Possible causes:" >&2
+        echo "  - Google login/OAuth token has expired" >&2
+        echo "  - Network or DNS is unavailable" >&2
+        echo "  - Google Drive permission was revoked" >&2
+        echo "" >&2
+        echo "Try reconnecting with:" >&2
+        echo -e "  ${C_CYAN}rclone config reconnect ${REMOTE_NAME}:${C_RESET}" >&2
+        echo "Then re-run setup:" >&2
+        echo -e "  ${C_CYAN}./setup.sh${C_RESET}" >&2
+        exit 1
+    fi
+
+    # Tier 2: Check target backup directory
+    if rclone lsf "${REMOTE}" --max-depth 0 &>/dev/null; then
+        echo -e "  ${BADGE_OK} Remote '${REMOTE}' is reachable and responding."
+    else
+        echo -e "  ${BADGE_OK} Remote '${REMOTE_NAME}:' is reachable (target folder will be created on first backup)."
+    fi
 else
-    echo "" >&2
-    echo -e "${BADGE_ERR} ${C_RED}${C_BOLD}Cannot access rclone remote '${REMOTE}'.${C_RESET}" >&2
-    echo "rclone output: ${lsf_output}" >&2
-    echo "" >&2
-    echo "Possible causes:" >&2
-    echo "  - Google login/OAuth token has expired" >&2
-    echo "  - Network or DNS is unavailable" >&2
-    echo "  - Google Drive permission was revoked" >&2
-    echo "" >&2
-    echo "Try reconnecting with:" >&2
-    echo -e "  ${C_CYAN}rclone config reconnect ${REMOTE_NAME}:${C_RESET}" >&2
-    echo "Then re-run setup:" >&2
-    echo -e "  ${C_CYAN}./setup.sh${C_RESET}" >&2
-    exit 1
+    if rclone lsf "${REMOTE}" --max-depth 0 &>/dev/null; then
+        echo -e "  ${BADGE_OK} Remote path '${REMOTE}' is reachable and responding."
+    else
+        echo -e "${BADGE_ERR} ${C_RED}Cannot access remote path '${REMOTE}'.${C_RESET}" >&2
+        exit 1
+    fi
 fi
 
 # ---------------------------------------------------------------------
@@ -188,11 +200,18 @@ if [ "${RUN_TEST}" = true ]; then
     echo -e "${C_BOLD}[5/5] Running Live End-to-End Backup Test...${C_RESET}"
     echo -e "${C_CYAN}${C_BOLD}=====================================================================${C_RESET}"
     
-    TEST_START_EPOCH="$(date +%s)"
-    echo -e "Starting systemd backup service..."
-    systemctl --user start hermes-cloud-backup.service
+    TIMEOUT_RAW="${TEST_TIMEOUT_SECONDS:-900}"
+    if ! [[ "${TIMEOUT_RAW}" =~ ^[1-9][0-9]*$ ]]; then
+        echo "" >&2
+        echo -e "${BADGE_ERR} ${C_RED}${C_BOLD}ERROR: TEST_TIMEOUT_SECONDS must be a positive integer (got '${TIMEOUT_RAW}').${C_RESET}" >&2
+        exit 1
+    fi
+    TIMEOUT_SEC="${TIMEOUT_RAW}"
 
-    TIMEOUT_SEC="${TEST_TIMEOUT_SECONDS:-900}"
+    TEST_START_EPOCH="$(date +%s)"
+    echo -e "Starting systemd backup service (non-blocking)..."
+    systemctl --user start --no-block hermes-cloud-backup.service
+
     MAX_POLLS=$(( TIMEOUT_SEC / 2 ))
     [ "${MAX_POLLS}" -lt 1 ] && MAX_POLLS=1
 
