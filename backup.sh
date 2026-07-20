@@ -44,6 +44,7 @@ preflight_backup() {
     require_command date
     require_command du
     require_command flock
+    require_command sha256sum
 
     if [ "$(state_get "ENABLE_SUPER_COMPRESSION" "false")" = "true" ]; then
         require_command xz
@@ -176,6 +177,10 @@ cleanup_gfs() {
     for old_file in "${to_delete[@]}"; do
         log_info "Deleting old archive: ${old_file}"
         rclone_delete_remote_file "${target_dest}${old_file}"
+        if rclone_verify_object "${target_dest}${old_file}.sha256" &>/dev/null; then
+            log_info "Deleting old manifest: ${old_file}.sha256"
+            rclone_delete_remote_file "${target_dest}${old_file}.sha256" 2>/dev/null || true
+        fi
     done
     log_success "GFS retention pruning finished."
 }
@@ -256,16 +261,27 @@ else
     UPLOAD_FILE="${TMP_ZIP}"
 fi
 
-log_step "[3/4] Uploading archive to destination (${DESTINATION})..."
+MANIFEST_NAME="${ARCHIVE_NAME}.sha256"
+TMP_MANIFEST="${WORKSPACE}/${MANIFEST_NAME}"
+(cd "${WORKSPACE}" && sha256sum "${ARCHIVE_NAME}") > "${TMP_MANIFEST}"
+log_info "Generated SHA-256 integrity manifest (${MANIFEST_NAME})."
+
+log_step "[3/4] Uploading archive and integrity manifest to destination (${DESTINATION})..."
 TARGET_REMOTE_FILE="${DESTINATION}${ARCHIVE_NAME}"
+TARGET_REMOTE_MANIFEST="${DESTINATION}${MANIFEST_NAME}"
 rclone_copy_file "${UPLOAD_FILE}" "${TARGET_REMOTE_FILE}"
+rclone_copy_file "${TMP_MANIFEST}" "${TARGET_REMOTE_MANIFEST}"
 
 log_step "Verifying remote upload integrity..."
 if ! rclone_verify_object "${TARGET_REMOTE_FILE}"; then
     log_error "Remote verification failed: '${TARGET_REMOTE_FILE}' missing or zero size on remote."
     exit 1
 fi
-log_success "Remote file upload verified."
+if ! rclone_verify_object "${TARGET_REMOTE_MANIFEST}"; then
+    log_error "Remote verification failed: manifest '${TARGET_REMOTE_MANIFEST}' missing or zero size on remote."
+    exit 1
+fi
+log_success "Remote archive upload and SHA-256 manifest verified."
 
 log_step "[4/4] Executing GFS retention cleanup..."
 cleanup_gfs "${DESTINATION}"

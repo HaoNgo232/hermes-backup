@@ -32,6 +32,7 @@ require_command rclone
 require_command zip
 require_command tar
 require_command date
+require_command sha256sum
 
 hermes_apply_persisted_environment
 
@@ -94,6 +95,29 @@ if [ "${dl_bytes}" -le 0 ]; then
 fi
 
 log_success "Download complete (${dl_bytes} bytes)."
+
+TMP_MANIFEST="${WORKSPACE}/${TARGET_FILE}.sha256"
+log_step "Verifying archive integrity manifest..."
+if rclone_fetch_file "${SOURCE}${TARGET_FILE}.sha256" "${TMP_MANIFEST}" 2>/dev/null && [ -f "${TMP_MANIFEST}" ]; then
+    log_info "Integrity manifest '${TARGET_FILE}.sha256' downloaded successfully."
+    expected_hash="$(awk '{print $1}' "${TMP_MANIFEST}" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]' || echo "")"
+    if ! [[ "${expected_hash}" =~ ^[a-f0-9]{64}$ ]]; then
+        log_error "Malformed integrity manifest '${TARGET_FILE}.sha256': expected a 64-character SHA-256 hash."
+        exit 1
+    fi
+    actual_hash="$(sha256sum "${TMP_FILE}" | awk '{print $1}' | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
+    if [ "${actual_hash}" != "${expected_hash}" ]; then
+        log_error "INTEGRITY ERROR: SHA-256 checksum mismatch for '${TARGET_FILE}'!"
+        log_error "Expected SHA-256 : ${expected_hash}"
+        log_error "Computed SHA-256 : ${actual_hash}"
+        log_error "Restore aborted to prevent restoring corrupt or tampered backup data."
+        exit 1
+    fi
+    log_success "SHA-256 integrity manifest verified successfully."
+else
+    log_warn "Legacy backup detected: No integrity manifest ('${TARGET_FILE}.sha256') found on remote source."
+    log_warn "Proceeding with restore using basic file size validation."
+fi
 
 validate_tar_member_paths() {
     local archive="$1"

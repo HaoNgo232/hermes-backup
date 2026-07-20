@@ -14,6 +14,7 @@ TEST_FILES=(
     "${ROOT}/tests/test_state.sh"
     "${ROOT}/tests/test_encryption_logic.sh"
     "${ROOT}/tests/test_idempotency.sh"
+    "${ROOT}/tests/test_integrity_manifest.sh"
     "${ROOT}/tests/test_secret_leaks.sh"
     "${ROOT}/tests/test_systemd_render.sh"
     "${ROOT}/tests/test_backup_behavior.sh"

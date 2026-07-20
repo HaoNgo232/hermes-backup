@@ -260,6 +260,8 @@ if [ -n "${LATEST_BACKUP}" ]; then
     echo "  Filename         : ${b_file}"
     echo "  Timestamp        : ${b_time}"
     echo "  Archive Size     : ${b_size} bytes"
+elif [ "${LATEST_LIST_OK}" = false ]; then
+    echo "  Filename         : Failed to list remote backups"
 else
     echo "  Filename         : None found"
 fi

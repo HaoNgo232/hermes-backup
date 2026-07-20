@@ -201,4 +201,28 @@ EOF
 }
 assert_succeeds "Reminder state remains shown when already shown" test_reminder_notice_repeat
 
+# Test 8: Concurrent execution lock check
+test_concurrent_execution_lock() {
+    local tmp_conf="${TEST_TMP_DIR}/fc8"
+    local lock_file="${tmp_conf}/backup.lock"
+    mkdir -p "${tmp_conf}"
+
+    exec 9>"${lock_file}"
+    flock -n 9
+
+    env \
+        HOME="${tmp_conf}/home" \
+        XDG_CONFIG_HOME="${tmp_conf}/cfg" \
+        REPO_DIR="${REPO_DIR}" \
+        bash -Eeuo pipefail -c '
+            source "${REPO_DIR}/lib/common.sh"
+            acquire_backup_lock "'"${lock_file}"'"
+            exit 1
+        ' >/dev/null 2>&1
+    local ret=$?
+    exec 9>&-
+    return "${ret}"
+}
+assert_succeeds "Concurrent execution lock prevents parallel backups" test_concurrent_execution_lock
+
 echo -e "\033[0;32mALL IDEMPOTENCY & FAIL-CLOSED TESTS PASSED!\033[0m"

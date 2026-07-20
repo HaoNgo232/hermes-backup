@@ -2,7 +2,7 @@
 
 Automatically back up your [Hermes Agent](https://github.com/NousResearch/hermes-agent) data to Google Drive — and restore it when you need it.
 
-**What this tool does for you:**
+**What these scripts do for you:**
 
 - 📦 **Backs up your Hermes data** to Google Drive automatically every 4 hours
 - 🗜️ **Compresses your backup** to save storage space (with an optional "super compression" mode for even smaller files)
@@ -19,7 +19,7 @@ Automatically back up your [Hermes Agent](https://github.com/NousResearch/hermes
 These are the tools that Hermes Backup needs to work. Copy and paste this command into your terminal:
 
 ```bash
-sudo apt update && sudo apt install -y rclone unzip zip xz-utils util-linux
+sudo apt update && sudo apt install -y rclone unzip zip xz-utils util-linux shellcheck
 ```
 
 ### 2. Download Hermes Backup and run setup
@@ -52,7 +52,7 @@ If everything shows green/OK, you're done! Backups will now run automatically **
 > sudo loginctl enable-linger "$USER"
 > ```
 
-**What just happened?** You installed the backup tool, connected it to Google Drive, and set up automatic backups. From now on, your Hermes data is being backed up every 4 hours without you doing anything.
+**What just happened?** You installed the backup scripts, connected to Google Drive, and set up automatic backups. From now on, your Hermes data is being backed up every 4 hours without you doing anything.
 
 ---
 
@@ -60,14 +60,14 @@ If everything shows green/OK, you're done! Backups will now run automatically **
 
 These are the commands you'll use most often:
 
-| What you want to do | Command | What it does |
-| :--- | :--- | :--- |
-| **See if everything is working** | `./status.sh` | Checks your Google Drive connection, backup schedule, and latest backup |
-| **Back up right now** | `./backup.sh` | Runs a backup immediately instead of waiting for the next scheduled one |
-| **Restore your latest backup** | `./restore.sh` | Downloads and restores your most recent backup from Google Drive |
-| **Restore a specific backup** | `./restore.sh <filename>` | Restores a particular backup file (e.g., `hermes-backup-20-07-2026_14h00p00s.tar.xz`) |
-| **Run setup again** | `./setup.sh` | Re-run the setup wizard (useful after changing settings) |
-| **Test everything end-to-end** | `./setup.sh --test` | Runs setup and then does a real test backup to make sure everything works |
+| What you want to do              | Command                   | What it does                                                                          |
+| :------------------------------- | :------------------------ | :------------------------------------------------------------------------------------ |
+| **See if everything is working** | `./status.sh`             | Checks your Google Drive connection, backup schedule, and latest backup               |
+| **Back up right now**            | `./backup.sh`             | Runs a backup immediately instead of waiting for the next scheduled one               |
+| **Restore your latest backup**   | `./restore.sh`            | Downloads and restores your most recent backup from Google Drive                      |
+| **Restore a specific backup**    | `./restore.sh <filename>` | Restores a particular backup file (e.g., `hermes-backup-20-07-2026_14h00p00s.tar.xz`) |
+| **Run setup again**              | `./setup.sh`              | Re-run the setup wizard (useful after changing settings)                              |
+| **Test everything end-to-end**   | `./setup.sh --test`       | Runs setup and then does a real test backup to make sure everything works             |
 
 > [!WARNING]
 > **About restoring:** Restoring a backup will **overwrite** your current Hermes data with the backup version. Make sure this is what you want before running `./restore.sh`.
@@ -85,7 +85,7 @@ Enable client-side encryption for cloud backups? [y/N]:
 ```
 
 - **Press Enter or type `N`:** Your backups are uploaded as-is. Simple and easy to restore.
-- **Type `y`:** Your files are scrambled (encrypted) on your computer *before* being uploaded. Even if someone gains access to your Google Drive, they can't read your backup files. However, you must save two recovery keys — if you lose both your server and those keys, your backups are gone forever.
+- **Type `y`:** Your files are scrambled (encrypted) on your computer _before_ being uploaded. Even if someone gains access to your Google Drive, they can't read your backup files. However, you must save two recovery keys — if you lose both your server and those keys, your backups are gone forever.
 
 See [Encryption Details](#encryption-details) below if you choose `y`.
 
@@ -108,6 +108,7 @@ Enable super compression (.tar.xz)? [y/N]:
 ### What encryption does
 
 When encryption is enabled:
+
 - Your backup files are scrambled on your computer **before** uploading to Google Drive
 - Nobody can read your backups without the encryption keys — not even Google
 - Scheduled backups still run automatically without asking for a password
@@ -171,15 +172,15 @@ Create a remote named `gdrive-hermes` following the steps in [Connecting Google 
 
 **Step 2:** Set up the encryption layer. Run `rclone config` again and create a new remote. When rclone asks you each question, enter these values exactly:
 
-| rclone asks | You enter |
-|:---|:---|
-| Name | `hermes-backup-crypt` |
-| Storage type | `crypt` |
+| rclone asks               | You enter                              |
+| :------------------------ | :------------------------------------- |
+| Name                      | `hermes-backup-crypt`                  |
+| Storage type              | `crypt`                                |
 | Remote to encrypt/decrypt | `gdrive-hermes:HermesBackupsEncrypted` |
-| How to encrypt filenames | `standard` |
-| Encrypt directory names | `true` |
-| Password | Your saved **Recovery Password** |
-| Password2 (salt) | Your saved **Recovery Salt** |
+| How to encrypt filenames  | `standard`                             |
+| Encrypt directory names   | `true`                                 |
+| Password                  | Your saved **Recovery Password**       |
+| Password2 (salt)          | Your saved **Recovery Salt**           |
 
 **Step 3:** Verify that rclone can see your encrypted backups:
 
@@ -352,35 +353,35 @@ Run `./setup.sh` again. It will walk you through the same options and update you
 
 ### Timer Management
 
-| Task | Command | Description |
-| :--- | :--- | :--- |
-| **Install / update the backup timer** | `./setup.sh` | Validates setup and installs the systemd user timer |
-| **Re-render systemd unit files** | `./install-systemd.sh` | Needed if you moved the hermes-backup folder |
-| **Uninstall the timer** | `./uninstall.sh` | Stops and removes the scheduled backup timer |
-| **View timer schedule** | `systemctl --user list-timers hermes-cloud-backup.timer` | Shows when the next backup is scheduled |
+| Task                                  | Command                                                  | Description                                         |
+| :------------------------------------ | :------------------------------------------------------- | :-------------------------------------------------- |
+| **Install / update the backup timer** | `./setup.sh`                                             | Validates setup and installs the systemd user timer |
+| **Re-render systemd unit files**      | `./install-systemd.sh`                                   | Needed if you moved the hermes-backup folder        |
+| **Uninstall the timer**               | `./uninstall.sh`                                         | Stops and removes the scheduled backup timer        |
+| **View timer schedule**               | `systemctl --user list-timers hermes-cloud-backup.timer` | Shows when the next backup is scheduled             |
 
 ### Debugging
 
-| Task | Command |
-| :--- | :--- |
-| **View recent backup log** | `tail -n 100 logs/backup.log` |
-| **View systemd journal logs** | `journalctl --user -u hermes-cloud-backup.service -n 100 --no-pager` |
-| **Trigger backup via systemd** | `systemctl --user start hermes-cloud-backup.service` |
-| **Single-line health summary** | `./status.sh --check` |
+| Task                           | Command                                                              |
+| :----------------------------- | :------------------------------------------------------------------- |
+| **View recent backup log**     | `tail -n 100 logs/backup.log`                                        |
+| **View systemd journal logs**  | `journalctl --user -u hermes-cloud-backup.service -n 100 --no-pager` |
+| **Trigger backup via systemd** | `systemctl --user start hermes-cloud-backup.service`                 |
+| **Single-line health summary** | `./status.sh --check`                                                |
 
 ### Environment Variables
 
 These are for advanced customization only:
 
-| Variable | Default Value | Description |
-| :--- | :--- | :--- |
-| `BACKUP_REMOTE` | `gdrive-hermes:HermesBackups` | Google Drive remote and folder for backups |
-| `HERMES_BIN` | Auto-detected via `command -v hermes` | Custom path to `hermes` executable |
-| `BACKUP_LOCK_FILE` | `$XDG_RUNTIME_DIR/hermes-backup.lock` | Lock file to prevent concurrent backups |
-| `BACKUP_LOG_DIR` | `<repo_dir>/logs` | Where backup logs are saved |
-| `RESTORE_LOG_DIR` | `<repo_dir>/logs` | Where restore logs are saved |
-| `MAX_LOG_LINES` | `5000` | Log file is rotated after this many lines |
-| `KEEP_LOG_LINES` | `2000` | Lines kept after log rotation |
+| Variable           | Default Value                         | Description                                |
+| :----------------- | :------------------------------------ | :----------------------------------------- |
+| `BACKUP_REMOTE`    | `gdrive-hermes:HermesBackups`         | Google Drive remote and folder for backups |
+| `HERMES_BIN`       | Auto-detected via `command -v hermes` | Custom path to `hermes` executable         |
+| `BACKUP_LOCK_FILE` | `$XDG_RUNTIME_DIR/hermes-backup.lock` | Lock file to prevent concurrent backups    |
+| `BACKUP_LOG_DIR`   | `<repo_dir>/logs`                     | Where backup logs are saved                |
+| `RESTORE_LOG_DIR`  | `<repo_dir>/logs`                     | Where restore logs are saved               |
+| `MAX_LOG_LINES`    | `5000`                                | Log file is rotated after this many lines  |
+| `KEEP_LOG_LINES`   | `2000`                                | Lines kept after log rotation              |
 
 </details>
 
@@ -388,15 +389,15 @@ These are for advanced customization only:
 
 ## Troubleshooting
 
-| Problem | What's happening | How to fix it |
-| :--- | :--- | :--- |
-| `Cannot access rclone remote` | Your Google Drive connection expired or was revoked | Run `rclone config reconnect gdrive-hermes:` and then test with `rclone lsf gdrive-hermes:` |
-| `setup.sh --test fails` | The test backup didn't complete successfully | Check the logs: `journalctl --user -u hermes-cloud-backup.service -n 100 --no-pager` |
-| `hermes: command not found` | The backup tool can't find the Hermes program | Set the path manually: `HERMES_BIN=/path/to/hermes ./setup.sh` |
-| `rclone remote not found` | Google Drive hasn't been connected yet | Follow the steps in [Connecting Google Drive](#connecting-google-drive) |
-| `Another backup is already running` | A backup is still in progress | Wait for it to finish. Check `./status.sh` or `tail logs/backup.log` |
-| Timer doesn't run after reboot | The server stops your scheduled tasks when you log out | Run `sudo loginctl enable-linger $USER` |
-| Something else went wrong | — | Run `./status.sh` and share the output when asking for help |
+| Problem                             | What's happening                                       | How to fix it                                                                               |
+| :---------------------------------- | :----------------------------------------------------- | :------------------------------------------------------------------------------------------ |
+| `Cannot access rclone remote`       | Your Google Drive connection expired or was revoked    | Run `rclone config reconnect gdrive-hermes:` and then test with `rclone lsf gdrive-hermes:` |
+| `setup.sh --test fails`             | The test backup didn't complete successfully           | Check the logs: `journalctl --user -u hermes-cloud-backup.service -n 100 --no-pager`        |
+| `hermes: command not found`         | The scripts can't find the Hermes program              | Set the path manually: `HERMES_BIN=/path/to/hermes ./setup.sh`                              |
+| `rclone remote not found`           | Google Drive hasn't been connected yet                 | Follow the steps in [Connecting Google Drive](#connecting-google-drive)                     |
+| `Another backup is already running` | A backup is still in progress                          | Wait for it to finish. Check `./status.sh` or `tail logs/backup.log`                        |
+| Timer doesn't run after reboot      | The server stops your scheduled tasks when you log out | Run `sudo loginctl enable-linger $USER`                                                     |
+| Something else went wrong           | —                                                      | Run `./status.sh` and share the output when asking for help                                 |
 
 ---
 
