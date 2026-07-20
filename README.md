@@ -1,71 +1,78 @@
-# Hermes Backup sang Google Drive (Đơn giản)
+# Hermes Backup to Google Drive (Simple)
 
-Tự động backup dữ liệu Hermes Agent lên Google Drive mỗi 4 tiếng.
+Automatically back up Hermes Agent data to Google Drive every four hours.
 
 ---
 
-## 0. Cài đặt & Kết nối Google Drive (Chỉ làm 1 lần đầu)
+## 0. Install and Connect Google Drive (One-Time Setup)
 
-### B1: Cài đặt công cụ cần thiết (rclone & shellcheck)
+### Step 1: Clone the repository
+
+```bash
+git clone <repository-url> ~/hermes-backup
+cd ~/hermes-backup
+```
+
+### Step 2: Install required tools (rclone and shellcheck)
+
 ```bash
 sudo apt update && sudo apt install -y rclone shellcheck
 ```
 
-### B2: Cấu hình kết nối Google Drive
-Chạy lệnh `rclone config` và chọn các phím bấm theo thứ tự sau:
+### Step 3: Configure the Google Drive connection
 
-1. `n` *(New remote)* -> Nhập tên: **`gdrive-hermes`**
-2. Chọn loại storage: nhập **`drive`** *(Google Drive)*
-3. `client_id` & `client_secret`: Bấm **Enter** (để trống)
-4. `scope`: Bấm **Enter** (mặc định `drive.file`)
-5. `service_account_file`: Bấm **Enter** (để trống)
-6. `Edit advanced config?`: chọn **`n`**
-7. `Use auto config?`: chọn **`y`** *(Trình duyệt tự mở, đăng nhập Google và bấm **Cho phép**)*
-8. `Shared Drive?`: chọn **`n`**
-9. `Keep this "gdrive-hermes" remote?`: chọn **`y`**
-10. `q` *(Thoát config)*
+Run `rclone config` and select the following options in order:
+
+1. `n` _(New remote)_ -> Enter the name: **`gdrive-hermes`**
+2. Select storage type: enter **`drive`** _(Google Drive)_
+3. `client_id` and `client_secret`: press **Enter** (leave empty)
+4. `scope`: press **Enter** (default: `drive.file`)
+5. `service_account_file`: press **Enter** (leave empty)
+6. `Edit advanced config?`: select **`n`**
+7. `Use auto config?`: select **`y`** _(your browser opens; sign in to Google and click **Allow**)_
+8. `Shared Drive?`: select **`n`**
+9. `Keep this "gdrive-hermes" remote?`: select **`y`**
+10. `q` _(quit configuration)_
 
 ---
 
-## 1. Backup (chỉ cần 1 lệnh duy nhất)
+## 1. Backup
 
 ```bash
+cd ~/hermes-backup
 ./backup.sh
 ```
 
-**Lần đầu chạy**: Script sẽ tự động cài Systemd Timer để backup **mỗi 4 tiếng** (2h, 6h, 10h, 14h, 18h, 22h). Từ đó không cần làm gì nữa.
+**First run**: The script automatically installs a Systemd Timer to run backups **every four hours** (02:00, 06:00, 10:00, 14:00, 18:00, and 22:00). No further action is needed.
 
-**Chiến lược lưu trữ GFS** (tự động dọn dẹp bản cũ):
-| Tầng | Giữ bao nhiêu | Mục đích |
-|------|---------------|----------|
-| Gần đây | Tất cả trong 2 ngày | Phục hồi nhanh |
-| Hàng ngày | 1 bản/ngày × 7 ngày | Lỗi phát hiện trong tuần |
-| Hàng tuần | 1 bản/tuần × 4 tuần | Lỗi phát hiện chậm |
-| Hàng tháng | 1 bản/tháng × 3 tháng | Bảo hiểm dài hạn |
+**GFS retention strategy** (automatically removes old backups):
+
+| Tier    | Retention                     | Purpose                           |
+| ------- | ----------------------------- | --------------------------------- |
+| Recent  | Every backup for 2 days       | Fast recovery                     |
+| Daily   | 1 backup per day × 7 days     | Issues discovered during the week |
+| Weekly  | 1 backup per week × 4 weeks   | Issues discovered later           |
+| Monthly | 1 backup per month × 3 months | Long-term protection              |
 
 ---
 
-## 2. Khôi phục dữ liệu (Restore)
+## 2. Restore Data
 
-Chạy 1 lệnh duy nhất để tự động tải bản backup mới nhất và import:
+Run one command to automatically download and import the latest backup:
 
 ```bash
+cd ~/hermes-backup
 ./restore.sh
 ```
 
-*(Hoặc khôi phục một bản cụ thể: `./restore.sh <tên-file-backup.zip>`)*
+_(Or restore a specific backup: `./restore.sh <backup-file-name.zip>`)_
 
 ---
 
-## Xem nhật ký (Logs)
+## View Logs
 
 ```bash
+cd ~/hermes-backup
 tail -f logs/backup.log
 tail -f logs/restore.log
-```
-
-## Kiểm tra trạng thái timer
-
-```bash
-systemctl --user list-timers hermes-cloud-backup.timer
 ```

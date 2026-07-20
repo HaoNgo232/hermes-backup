@@ -12,7 +12,7 @@ UNIT_DIR="$HOME/.config/systemd/user"
 SERVICE="hermes-cloud-backup.service"
 TIMER="hermes-cloud-backup.timer"
 
-SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 [ "$(id -u)" -eq 0 ] && { echo "Refusing to run as root." >&2; exit 1; }
 

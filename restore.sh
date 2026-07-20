@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # =====================================================================
 # Hermes Restore Script
-# Tự động tải bản backup mới nhất từ Google Drive và khôi phục
+# Automatically downloads and restores the latest backup from Google Drive
 # =====================================================================
 set -euo pipefail
 
@@ -16,7 +16,7 @@ log() {
 
 REMOTE="${BACKUP_REMOTE:-gdrive-hermes:HermesBackups}"
 
-# Chắc chắn REMOTE kết thúc bằng / nếu có folder
+# Ensure REMOTE ends with / when it contains a folder path
 case "${REMOTE}" in
     *:) ;;
     */) ;;
@@ -26,11 +26,11 @@ esac
 TARGET_FILE="${1:-}"
 
 if [ -z "${TARGET_FILE}" ]; then
-    log "Đang tìm bản backup mới nhất trên Google Drive (${REMOTE})..."
+    log "Finding the latest backup on Google Drive (${REMOTE})..."
     TARGET_FILE="$(rclone lsf "${REMOTE}" --format "tp" --files-only 2>/dev/null | grep -E ';hermes-backup-.*\.zip$' | sort | tail -n1 | cut -d';' -f2-)"
     
     if [ -z "${TARGET_FILE}" ]; then
-        log "LỖI: Không tìm thấy bản backup nào trên Google Drive!"
+        log "ERROR: No backup was found on Google Drive."
         exit 1
     fi
 fi
@@ -42,15 +42,15 @@ cleanup() {
 }
 trap cleanup EXIT
 
-log "Đang tải bản backup '${TARGET_FILE}' từ Google Drive..."
+log "Downloading backup '${TARGET_FILE}' from Google Drive..."
 rclone copyto "${REMOTE}${TARGET_FILE}" "${TMP_ZIP}"
 
 if [ ! -f "${TMP_ZIP}" ]; then
-    log "LỖI: Tải thất bại file backup ${TARGET_FILE}"
+    log "ERROR: Failed to download backup file ${TARGET_FILE}"
     exit 1
 fi
 
-log "Đã tải xong. Đang khôi phục dữ liệu bằng 'hermes import'..."
+log "Download complete. Restoring data with 'hermes import'..."
 hermes import --force "${TMP_ZIP}"
 
-log "Khôi phục thành công từ bản backup '${TARGET_FILE}'!"
+log "Restore completed successfully from backup '${TARGET_FILE}'."
