@@ -1,0 +1,20 @@
+# Logs
+logs/
+*.log
+
+# Staging, temp and var directories
+staging/
+restore-tmp/
+var/
+
+# Configuration (secrets)
+config/backup.env
+!config/backup.env.example
+
+# Zip archives
+*.zip
+
+# System files
+.DS_Store
+*.swp
+.synapse

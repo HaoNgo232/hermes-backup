@@ -1,0 +1,13 @@
+[Unit]
+Description=Hourly Hermes cloud backup timer
+Documentation=%h/hermes-backup/README.md
+
+[Timer]
+# Run hourly (mỗi 1 tiếng 1 lần)
+OnCalendar=hourly
+Persistent=true
+RandomizedDelaySec=5min
+Unit=hermes-cloud-backup.service
+
+[Install]
+WantedBy=timers.target
