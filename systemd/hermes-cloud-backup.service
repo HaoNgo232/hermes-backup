@@ -1,6 +1,6 @@
 [Unit]
 Description=Hermes Agent cloud backup (rclone -> Google Drive)
-Documentation=file://@REPO_DIR@/README.md
+Documentation=https://github.com/HaoNgo232/hermes-backup#readme
 After=network-online.target
 Wants=network-online.target
 

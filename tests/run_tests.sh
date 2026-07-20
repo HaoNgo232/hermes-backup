@@ -17,6 +17,8 @@ TEST_FILES=(
     "${ROOT}/tests/test_secret_leaks.sh"
     "${ROOT}/tests/test_systemd_render.sh"
     "${ROOT}/tests/test_backup_behavior.sh"
+    "${ROOT}/tests/test_restore_behavior.sh"
+    "${ROOT}/tests/test_hermes_resolution.sh"
 )
 
 FAILED=0

@@ -9,6 +9,7 @@ export LOG_FILE="${BACKUP_LOG_DIR:-${SCRIPT_DIR}/logs}/backup.log"
 
 source "${SCRIPT_DIR}/lib/common.sh"
 source "${SCRIPT_DIR}/lib/state.sh"
+source "${SCRIPT_DIR}/lib/hermes.sh"
 source "${SCRIPT_DIR}/lib/rclone.sh"
 source "${SCRIPT_DIR}/lib/encryption.sh"
 
@@ -46,15 +47,9 @@ preflight_backup() {
     require_command flock
 
     # Resolve Hermes binary
-    HERMES_RESOLVED=""
-    if [ -n "${HERMES_BIN:-}" ] && [ -x "${HERMES_BIN}" ]; then
-        HERMES_RESOLVED="${HERMES_BIN}"
-    elif command -v hermes &>/dev/null; then
-        HERMES_RESOLVED="$(command -v hermes)"
-    fi
+    hermes_apply_persisted_environment
 
-    if [ -z "${HERMES_RESOLVED}" ]; then
-        log_error "'hermes' binary not found. Set HERMES_BIN=/path/to/hermes or add it to PATH."
+    if ! HERMES_RESOLVED="$(hermes_resolve_binary)"; then
         exit 1
     fi
     log_info "Using Hermes binary: ${HERMES_RESOLVED}"
@@ -104,8 +99,8 @@ cleanup_gfs() {
     while IFS=; read -r line || [ -n "${line}" ]; do
         [ -z "${line}" ] && continue
 
-        local file_time_str="" file_name="" file_size=""
-        IFS=';' read -r file_time_str file_name file_size <<< "${line}"
+        local file_time_str="" file_name="" _file_size=""
+        IFS=';' read -r file_time_str file_name _file_size <<< "${line}"
 
         if [ -z "${file_time_str}" ] || [ -z "${file_name}" ]; then
             continue

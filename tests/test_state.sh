@@ -15,38 +15,60 @@ cleanup() {
 }
 trap cleanup EXIT
 
-export XDG_CONFIG_HOME="${TEST_TMP_DIR}"
-
-source "${REPO_DIR}/lib/common.sh"
-source "${REPO_DIR}/lib/state.sh"
-
 echo "=== Running State Unit Tests ==="
 
 # Test 1: Defaults
-state_load
-assert_equals "false" "$(state_get "ENCRYPTION_ENABLED")" "Default ENCRYPTION_ENABLED is false"
-assert_equals "none" "$(state_get "ENCRYPTION_MODE")" "Default ENCRYPTION_MODE is none"
+test_defaults() {
+    local tdir="${TEST_TMP_DIR}/def"
+    env XDG_CONFIG_HOME="${tdir}" REPO_DIR="${REPO_DIR}" bash -Eeuo pipefail -c '
+        source "${REPO_DIR}/lib/common.sh"
+        source "${REPO_DIR}/lib/state.sh"
+        state_load
+        [ "$(state_get "ENCRYPTION_ENABLED")" = "false" ]
+        [ "$(state_get "ENCRYPTION_MODE")" = "none" ]
+    '
+}
+assert_succeeds "Default state options loaded correctly" test_defaults
 
 # Test 2: File permissions
-assert_file_mode "${APP_CONFIG_DIR}" "700" "Config dir permissions 0700"
-state_save
-assert_file_mode "${APP_STATE_FILE}" "600" "State file permissions 0600"
+test_permissions() {
+    local tdir="${TEST_TMP_DIR}/perm"
+    env XDG_CONFIG_HOME="${tdir}" REPO_DIR="${REPO_DIR}" bash -Eeuo pipefail -c '
+        source "${REPO_DIR}/lib/common.sh"
+        source "${REPO_DIR}/lib/state.sh"
+        state_load
+        state_save
+    '
+    assert_file_mode "${TEST_TMP_DIR}/perm/hermes-backup" "700" "Config dir permissions 0700"
+    assert_file_mode "${TEST_TMP_DIR}/perm/hermes-backup/state.env" "600" "State file permissions 0600"
+}
+test_permissions
 
 # Test 3: Validation - Invalid boolean string
 test_invalid_boolean() {
-    state_set "ENCRYPTION_ENABLED" "invalid_bool"
+    local tdir="${TEST_TMP_DIR}/inv_bool"
+    env XDG_CONFIG_HOME="${tdir}" REPO_DIR="${REPO_DIR}" bash -Eeuo pipefail -c '
+        source "${REPO_DIR}/lib/common.sh"
+        source "${REPO_DIR}/lib/state.sh"
+        state_set "ENCRYPTION_ENABLED" "invalid_bool"
+    '
 }
 assert_fails "Invalid ENCRYPTION_ENABLED string rejected" test_invalid_boolean
 
 # Test 4: Validation - Invalid mode
 test_invalid_mode() {
-    state_set_many "ENCRYPTION_ENABLED" "true" "ENCRYPTION_MODE" "invalid_mode"
+    local tdir="${TEST_TMP_DIR}/inv_mode"
+    env XDG_CONFIG_HOME="${tdir}" REPO_DIR="${REPO_DIR}" bash -Eeuo pipefail -c '
+        source "${REPO_DIR}/lib/common.sh"
+        source "${REPO_DIR}/lib/state.sh"
+        state_set_many "ENCRYPTION_ENABLED" "true" "ENCRYPTION_MODE" "invalid_mode"
+    '
 }
 assert_fails "Invalid ENCRYPTION_MODE rejected" test_invalid_mode
 
 # Test 5: Validation - Unknown state key rejected in fresh subshell
 test_unknown_key() {
-    local tmp_c="$(mktemp -d "${TEST_TMP_DIR}/uk-XXXXXX")"
+    local tmp_c="${TEST_TMP_DIR}/uk"
     env XDG_CONFIG_HOME="${tmp_c}" REPO_DIR="${REPO_DIR}" bash -Eeuo pipefail -c '
         source "${REPO_DIR}/lib/common.sh"
         source "${REPO_DIR}/lib/state.sh"
@@ -60,7 +82,7 @@ assert_fails "Unknown state key rejected" test_unknown_key
 
 # Test 6: Validation - Newline in value rejected in fresh subshell
 test_unsafe_newline() {
-    local tmp_c="$(mktemp -d "${TEST_TMP_DIR}/nl-XXXXXX")"
+    local tmp_c="${TEST_TMP_DIR}/nl"
     env XDG_CONFIG_HOME="${tmp_c}" REPO_DIR="${REPO_DIR}" bash -Eeuo pipefail -c '
         source "${REPO_DIR}/lib/common.sh"
         source "${REPO_DIR}/lib/state.sh"
@@ -74,34 +96,46 @@ assert_fails "State newline injection rejected" test_unsafe_newline
 
 # Test 7: Fail closed on inconsistent state (ENCRYPTION_ENABLED=true but no CRYPT_REMOTE)
 test_inconsistent_state() {
-    state_set_many "ENCRYPTION_ENABLED" "true" "ENCRYPTION_MODE" "rclone-crypt" "CRYPT_REMOTE" ""
+    local tdir="${TEST_TMP_DIR}/inc1"
+    env XDG_CONFIG_HOME="${tdir}" REPO_DIR="${REPO_DIR}" bash -Eeuo pipefail -c '
+        source "${REPO_DIR}/lib/common.sh"
+        source "${REPO_DIR}/lib/state.sh"
+        state_set_many "ENCRYPTION_ENABLED" "true" "ENCRYPTION_MODE" "rclone-crypt" "CRYPT_REMOTE" ""
+    '
 }
 assert_fails "Inconsistent state without CRYPT_REMOTE fails closed" test_inconsistent_state
 
 # Test 8: Fail closed when ENCRYPTION_ENABLED=false but CRYPT_REMOTE is set
 test_inconsistent_false_state() {
-    state_set_many "ENCRYPTION_ENABLED" "false" "ENCRYPTION_MODE" "none" "CRYPT_REMOTE" "my-crypt:"
+    local tdir="${TEST_TMP_DIR}/inc2"
+    env XDG_CONFIG_HOME="${tdir}" REPO_DIR="${REPO_DIR}" bash -Eeuo pipefail -c '
+        source "${REPO_DIR}/lib/common.sh"
+        source "${REPO_DIR}/lib/state.sh"
+        state_set_many "ENCRYPTION_ENABLED" "false" "ENCRYPTION_MODE" "none" "CRYPT_REMOTE" "my-crypt:"
+    '
 }
 assert_fails "ENCRYPTION_ENABLED=false with CRYPT_REMOTE set fails closed" test_inconsistent_false_state
 
 # Test 9: state_set_many transactionality in fresh subshell
-batch_dir="$(mktemp -d "${TEST_TMP_DIR}/batch-XXXXXX")"
-env XDG_CONFIG_HOME="${batch_dir}" REPO_DIR="${REPO_DIR}" bash -Eeuo pipefail -c '
-    source "${REPO_DIR}/lib/common.sh"
-    source "${REPO_DIR}/lib/state.sh"
+test_state_set_many_batch() {
+    local batch_dir="${TEST_TMP_DIR}/batch"
+    env XDG_CONFIG_HOME="${batch_dir}" REPO_DIR="${REPO_DIR}" bash -Eeuo pipefail -c '
+        source "${REPO_DIR}/lib/common.sh"
+        source "${REPO_DIR}/lib/state.sh"
 
-    state_set_many \
-        "ENCRYPTION_ENABLED" "true" \
-        "ENCRYPTION_MODE" "rclone-crypt" \
-        "BASE_REMOTE" "gdrive-hermes:" \
-        "BASE_PATH" "HermesBackupsEncrypted" \
-        "CRYPT_REMOTE" "hermes-backup-crypt:" \
-        "CRYPT_PATH" "" \
-        "RECOVERY_NOTICE_STATE" "pending"
+        state_set_many \
+            "ENCRYPTION_ENABLED" "true" \
+            "ENCRYPTION_MODE" "rclone-crypt" \
+            "BASE_REMOTE" "gdrive-hermes:" \
+            "BASE_PATH" "HermesBackupsEncrypted" \
+            "CRYPT_REMOTE" "hermes-backup-crypt:" \
+            "CRYPT_PATH" "" \
+            "RECOVERY_NOTICE_STATE" "pending"
 
-    [ "$(state_get "ENCRYPTION_ENABLED")" = "true" ]
-    [ "$(state_get "CRYPT_REMOTE")" = "hermes-backup-crypt:" ]
-'
-assert_succeeds "state_set_many updated state successfully in isolated process" true
+        [ "$(state_get "ENCRYPTION_ENABLED")" = "true" ]
+        [ "$(state_get "CRYPT_REMOTE")" = "hermes-backup-crypt:" ]
+    '
+}
+assert_succeeds "state_set_many updated state successfully in isolated process" test_state_set_many_batch
 
 echo -e "\033[0;32mALL STATE UNIT TESTS PASSED!\033[0m"

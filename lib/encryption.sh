@@ -147,12 +147,17 @@ encryption_create_crypt_remote() {
     # Check for existing crypt remote (Idempotency matrix Section 8.1)
     if rclone_has_remote "${crypt_remote_name}"; then
         if encryption_is_enabled; then
-            local current_crypt="$(state_get "CRYPT_REMOTE")"
+            local current_crypt
+            current_crypt="$(state_get "CRYPT_REMOTE")"
             if [ "${current_crypt%%:*}" = "${crypt_remote_name}" ]; then
                 log_warn "Crypt remote '${crypt_remote_name}:' already configured for application state."
+                # shellcheck disable=SC2034
                 GEN_CRYPT_PASSWORD=""
+                # shellcheck disable=SC2034
                 GEN_CRYPT_SALT=""
+                # shellcheck disable=SC2034
                 GEN_CRYPT_REMOTE="${crypt_remote_name}:"
+                # shellcheck disable=SC2034
                 GEN_BASE_PATH="${crypt_folder}"
                 return 0
             fi
@@ -190,9 +195,13 @@ encryption_create_crypt_remote() {
         return 1
     fi
 
+    # shellcheck disable=SC2034
     GEN_CRYPT_PASSWORD="${plain_password}"
+    # shellcheck disable=SC2034
     GEN_CRYPT_SALT="${plain_salt}"
+    # shellcheck disable=SC2034
     GEN_CRYPT_REMOTE="${crypt_remote_name}:"
+    # shellcheck disable=SC2034
     GEN_BASE_PATH="${crypt_folder}"
 
     return 0

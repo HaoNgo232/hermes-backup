@@ -9,6 +9,7 @@ export LOG_FILE="${RESTORE_LOG_DIR:-${SCRIPT_DIR}/logs}/restore.log"
 
 source "${SCRIPT_DIR}/lib/common.sh"
 source "${SCRIPT_DIR}/lib/state.sh"
+source "${SCRIPT_DIR}/lib/hermes.sh"
 source "${SCRIPT_DIR}/lib/rclone.sh"
 source "${SCRIPT_DIR}/lib/encryption.sh"
 
@@ -33,15 +34,9 @@ require_command tar
 require_command xz
 require_command date
 
-HERMES_RESOLVED=""
-if [ -n "${HERMES_BIN:-}" ] && [ -x "${HERMES_BIN}" ]; then
-    HERMES_RESOLVED="${HERMES_BIN}"
-elif command -v hermes &>/dev/null; then
-    HERMES_RESOLVED="$(command -v hermes)"
-fi
+hermes_apply_persisted_environment
 
-if [ -z "${HERMES_RESOLVED}" ]; then
-    log_error "'hermes' binary not found. Set HERMES_BIN=/path/to/hermes or add it to PATH."
+if ! HERMES_RESOLVED="$(hermes_resolve_binary)"; then
     exit 1
 fi
 log_info "Using Hermes binary: ${HERMES_RESOLVED}"
@@ -101,8 +96,43 @@ fi
 
 log_success "Download complete (${dl_bytes} bytes)."
 
+validate_tar_member_paths() {
+    local archive="$1"
+    local listing=""
+    local member=""
+    local normalized=""
+
+    if ! listing="$(tar -tf "${archive}")"; then
+        log_error "Unable to inspect archive members."
+        return 1
+    fi
+
+    while IFS= read -r member || [ -n "${member}" ]; do
+        normalized="${member#./}"
+
+        if [ -z "${normalized}" ]; then
+            continue
+        fi
+
+        if [[ "${normalized}" == /* ]] ||
+           [[ "${normalized}" == ".." ]] ||
+           [[ "${normalized}" == ../* ]] ||
+           [[ "${normalized}" == */../* ]] ||
+           [[ "${normalized}" == */.. ]]; then
+            log_error "Unsafe archive member path detected."
+            return 1
+        fi
+    done <<< "${listing}"
+
+    return 0
+}
+
 if [[ "${TARGET_FILE}" == *.tar.xz ]]; then
     log_info "Decompressing .tar.xz archive..."
+    if ! validate_tar_member_paths "${TMP_FILE}"; then
+        log_error "Archive path validation failed for '${TARGET_FILE}'."
+        exit 1
+    fi
     mkdir -p "${TMP_DIR}"
     tar -xf "${TMP_FILE}" -C "${TMP_DIR}"
     (cd "${TMP_DIR}" && zip -r -q "${TMP_ZIP}" .)

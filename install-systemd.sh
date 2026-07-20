@@ -8,6 +8,7 @@ umask 077
 SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SRC_DIR}/lib/common.sh"
 source "${SRC_DIR}/lib/state.sh"
+source "${SRC_DIR}/lib/hermes.sh"
 
 if [ "$(id -u)" -eq 0 ]; then
     echo -e "${C_RED}ERROR: Refusing to run as root. Run as regular user.${C_RESET}" >&2
@@ -47,36 +48,21 @@ fi
 state_load
 
 STORED_HERMES_HOME="$(state_get "HERMES_HOME" "")"
-STORED_HERMES_BIN="$(state_get "HERMES_BIN" "")"
-
-HERMES_RESOLVED=""
-
-if [ -n "${HERMES_BIN:-}" ]; then
-    if [ ! -x "${HERMES_BIN}" ]; then
-        echo -e "${C_RED}ERROR: Explicit HERMES_BIN environment variable ('${HERMES_BIN}') is not executable.${C_RESET}" >&2
-        exit 1
-    fi
-    HERMES_RESOLVED="${HERMES_BIN}"
-elif [ -n "${STORED_HERMES_BIN}" ] && [ -x "${STORED_HERMES_BIN}" ]; then
-    HERMES_RESOLVED="${STORED_HERMES_BIN}"
-elif command -v hermes &>/dev/null; then
-    HERMES_RESOLVED="$(command -v hermes)"
-fi
-
-if [ -z "${HERMES_RESOLVED}" ]; then
-    echo -e "${C_RED}ERROR: 'hermes' executable not found in PATH or HERMES_BIN environment variable.${C_RESET}" >&2
-    echo "Please ensure Hermes is installed or set HERMES_BIN=/path/to/hermes before running installer." >&2
-    exit 1
-fi
-
-HERMES_DIR="$(dirname "${HERMES_RESOLVED}")"
-EXPLICIT_PATH="${HERMES_DIR}:${HOME}/.local/bin:/usr/local/bin:/usr/bin:/bin"
 
 if [ -n "${HERMES_HOME:-}" ] && [ -n "${STORED_HERMES_HOME}" ] && [ "${HERMES_HOME}" != "${STORED_HERMES_HOME}" ]; then
     echo -e "${C_RED}ERROR: HERMES_HOME environment variable ('${HERMES_HOME}') differs from stored state ('${STORED_HERMES_HOME}').${C_RESET}" >&2
     echo "Normal setup/install will not silently change Hermes home." >&2
     exit 1
 fi
+
+hermes_apply_persisted_environment
+
+if ! HERMES_RESOLVED="$(hermes_resolve_binary)"; then
+    exit 1
+fi
+
+HERMES_DIR="$(dirname "${HERMES_RESOLVED}")"
+EXPLICIT_PATH="${HERMES_DIR}:${HOME}/.local/bin:/usr/local/bin:/usr/bin:/bin"
 
 EFFECTIVE_XDG_CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}"
 EFFECTIVE_HERMES_HOME="${HERMES_HOME:-${STORED_HERMES_HOME:-$HOME/.hermes}}"
@@ -88,65 +74,160 @@ for checked_path in "${SRC_DIR}" "${HERMES_RESOLVED}" "${EFFECTIVE_XDG_CONFIG}" 
     fi
 done
 
-state_set_many "HERMES_HOME" "${EFFECTIVE_HERMES_HOME}" "HERMES_BIN" "${HERMES_RESOLVED}"
-
 # ---------------------------------------------------------------------
-# RENDER AND INSTALL UNITS
+# RENDER HELPERS
 # ---------------------------------------------------------------------
-mkdir -p "${UNIT_DIR}"
+systemd_escape_double_quoted() {
+    local value="$1"
 
-escape_sed() {
-    local val="$1"
-    val="${val//\\/\\\\}"
-    val="${val//\"/\\\"}"
-    val="${val//%/%%}"
-    printf '%s\n' "${val}" | sed -e 's/[\/&]/\\&/g'
+    if [[ "${value}" == *$'\n'* || "${value}" == *$'\r'* ]]; then
+        log_error "Cannot render a systemd value containing newline characters."
+        return 1
+    fi
+
+    value="${value//\\/\\\\}"
+    value="${value//\"/\\\"}"
+    value="${value//%/%%}"
+
+    printf '%s' "${value}"
 }
 
-REPO_DIR_ESC="$(escape_sed "${SRC_DIR}")"
-HERMES_BIN_ESC="$(escape_sed "${HERMES_RESOLVED}")"
-PATH_ESC="$(escape_sed "${EXPLICIT_PATH}")"
-XDG_CONFIG_ESC="$(escape_sed "${EFFECTIVE_XDG_CONFIG}")"
-HERMES_HOME_ESC="$(escape_sed "${EFFECTIVE_HERMES_HOME}")"
+replace_literal() {
+    local input="$1"
+    local token="$2"
+    local replacement="$3"
+    local prefix=""
 
-rendered_svc="$(sed -e "s/@REPO_DIR@/${REPO_DIR_ESC}/g" \
-    -e "s/@HERMES_BIN@/${HERMES_BIN_ESC}/g" \
-    -e "s/@HERMES_HOME@/${HERMES_HOME_ESC}/g" \
-    -e "s/@PATH@/${PATH_ESC}/g" \
-    -e "s/@XDG_CONFIG_HOME@/${XDG_CONFIG_ESC}/g" \
-    "${SRC_DIR}/systemd/${SERVICE}")"
-atomic_write_file "${UNIT_DIR}/${SERVICE}" "${rendered_svc}" 0644
+    REPLY=""
 
-rendered_timer="$(sed -e "s/@REPO_DIR@/${REPO_DIR_ESC}/g" "${SRC_DIR}/systemd/${TIMER}")"
-atomic_write_file "${UNIT_DIR}/${TIMER}" "${rendered_timer}" 0644
+    while [[ "${input}" == *"${token}"* ]]; do
+        prefix="${input%%"${token}"*}"
+        REPLY+="${prefix}${replacement}"
+        input="${input#*"${token}"}"
+    done
 
-echo -e "  ${BADGE_OK} Installed service: ${UNIT_DIR}/${SERVICE}"
-echo -e "  ${BADGE_OK} Installed timer:   ${UNIT_DIR}/${TIMER}"
+    REPLY+="${input}"
+}
 
-# Verify secret-like values are NOT present in generated unit file
-if grep -Eqi 'password2?|recovery|refresh_token|access_token|client_secret' "${UNIT_DIR}/${SERVICE}"; then
-    echo -e "${C_RED}ERROR: Secret-like values detected in rendered service unit!${C_RESET}" >&2
-    rm -f "${UNIT_DIR}/${SERVICE}" "${UNIT_DIR}/${TIMER}" 2>/dev/null || true
+# ---------------------------------------------------------------------
+# TRANSACTIONAL STAGING AND INSTALLATION
+# ---------------------------------------------------------------------
+STAGING_UNIT_DIR="$(mktemp -d "${TMPDIR:-/tmp}/hermes-systemd-units-XXXXXX")"
+chmod 0700 "${STAGING_UNIT_DIR}"
+
+cleanup_staging() {
+    if [ -n "${STAGING_UNIT_DIR:-}" ] && [ -d "${STAGING_UNIT_DIR}" ]; then
+        rm -rf "${STAGING_UNIT_DIR}" 2>/dev/null || true
+    fi
+}
+trap cleanup_staging EXIT
+
+REPO_DIR_ESC="$(systemd_escape_double_quoted "${SRC_DIR}")"
+HERMES_BIN_ESC="$(systemd_escape_double_quoted "${HERMES_RESOLVED}")"
+PATH_ESC="$(systemd_escape_double_quoted "${EXPLICIT_PATH}")"
+XDG_CONFIG_ESC="$(systemd_escape_double_quoted "${EFFECTIVE_XDG_CONFIG}")"
+HERMES_HOME_ESC="$(systemd_escape_double_quoted "${EFFECTIVE_HERMES_HOME}")"
+
+service_template="$(cat "${SRC_DIR}/systemd/${SERVICE}")"
+replace_literal "${service_template}" "@REPO_DIR@" "${REPO_DIR_ESC}"
+rendered_svc="${REPLY}"
+replace_literal "${rendered_svc}" "@HERMES_BIN@" "${HERMES_BIN_ESC}"
+rendered_svc="${REPLY}"
+replace_literal "${rendered_svc}" "@HERMES_HOME@" "${HERMES_HOME_ESC}"
+rendered_svc="${REPLY}"
+replace_literal "${rendered_svc}" "@PATH@" "${PATH_ESC}"
+rendered_svc="${REPLY}"
+replace_literal "${rendered_svc}" "@XDG_CONFIG_HOME@" "${XDG_CONFIG_ESC}"
+rendered_svc="${REPLY}"
+rendered_svc+=$'\n'
+
+timer_template="$(cat "${SRC_DIR}/systemd/${TIMER}")"
+replace_literal "${timer_template}" "@REPO_DIR@" "${REPO_DIR_ESC}"
+rendered_timer="${REPLY}"
+replace_literal "${rendered_timer}" "@HERMES_BIN@" "${HERMES_BIN_ESC}"
+rendered_timer="${REPLY}"
+replace_literal "${rendered_timer}" "@HERMES_HOME@" "${HERMES_HOME_ESC}"
+rendered_timer="${REPLY}"
+replace_literal "${rendered_timer}" "@PATH@" "${PATH_ESC}"
+rendered_timer="${REPLY}"
+replace_literal "${rendered_timer}" "@XDG_CONFIG_HOME@" "${XDG_CONFIG_ESC}"
+rendered_timer="${REPLY}"
+rendered_timer+=$'\n'
+
+atomic_write_file "${STAGING_UNIT_DIR}/${SERVICE}" "${rendered_svc}" 0644
+atomic_write_file "${STAGING_UNIT_DIR}/${TIMER}" "${rendered_timer}" 0644
+
+# 1. Check no placeholders remain
+if grep -R -E '@[A-Z0-9_]+@' "${STAGING_UNIT_DIR}" &>/dev/null; then
+    echo -e "${C_RED}ERROR: Unsubstituted placeholder remains in rendered unit files.${C_RESET}" >&2
     exit 1
 fi
 
+# 2. Run secret-like value check on staged service and timer
+if grep -Eqi 'password2?|recovery|refresh_token|access_token|client_secret' "${STAGING_UNIT_DIR}/${SERVICE}" "${STAGING_UNIT_DIR}/${TIMER}"; then
+    echo -e "${C_RED}ERROR: Secret-like values detected in rendered systemd unit!${C_RESET}" >&2
+    exit 1
+fi
+
+# 3. If systemd-analyze is installed, verify units
 if command -v systemd-analyze &>/dev/null; then
-    if systemd-analyze --user verify "${UNIT_DIR}/${SERVICE}" "${UNIT_DIR}/${TIMER}" &>/dev/null; then
+    if systemd-analyze --user verify "${STAGING_UNIT_DIR}/${SERVICE}" "${STAGING_UNIT_DIR}/${TIMER}" &>/dev/null; then
         :
-    elif systemd-analyze verify "${UNIT_DIR}/${SERVICE}" "${UNIT_DIR}/${TIMER}" &>/dev/null; then
+    elif systemd-analyze verify "${STAGING_UNIT_DIR}/${SERVICE}" "${STAGING_UNIT_DIR}/${TIMER}" &>/dev/null; then
         :
     else
         echo -e "${C_RED}ERROR: Rendered systemd unit failed verification.${C_RESET}" >&2
-        rm -f "${UNIT_DIR}/${SERVICE}" "${UNIT_DIR}/${TIMER}" 2>/dev/null || true
         exit 1
     fi
 fi
 
-# ---------------------------------------------------------------------
-# DAEMON RELOAD AND ACTIVATE
-# ---------------------------------------------------------------------
-systemctl --user daemon-reload
-systemctl --user enable --now "${TIMER}"
+# 4. Save existing unit content for rollback if needed
+BACKUP_SERVICE_EXISTS=false
+BACKUP_TIMER_EXISTS=false
+SVC_BACKUP_CONTENT=""
+TMR_BACKUP_CONTENT=""
+
+if [ -f "${UNIT_DIR}/${SERVICE}" ]; then
+    BACKUP_SERVICE_EXISTS=true
+    SVC_BACKUP_CONTENT="$(cat "${UNIT_DIR}/${SERVICE}")"
+fi
+if [ -f "${UNIT_DIR}/${TIMER}" ]; then
+    BACKUP_TIMER_EXISTS=true
+    TMR_BACKUP_CONTENT="$(cat "${UNIT_DIR}/${TIMER}")"
+fi
+
+# Atomically install final unit files
+mkdir -p "${UNIT_DIR}"
+atomic_write_file "${UNIT_DIR}/${SERVICE}" "${rendered_svc}" 0644
+atomic_write_file "${UNIT_DIR}/${TIMER}" "${rendered_timer}" 0644
+
+# Persist HERMES_HOME and HERMES_BIN state
+state_set_many "HERMES_HOME" "${EFFECTIVE_HERMES_HOME}" "HERMES_BIN" "${HERMES_RESOLVED}"
+
+echo -e "  ${BADGE_OK} Installed service: ${UNIT_DIR}/${SERVICE}"
+echo -e "  ${BADGE_OK} Installed timer:   ${UNIT_DIR}/${TIMER}"
+
+# 5. Daemon reload and activate with rollback on failure
+rollback_units() {
+    if [ "${BACKUP_SERVICE_EXISTS}" = true ]; then
+        atomic_write_file "${UNIT_DIR}/${SERVICE}" "${SVC_BACKUP_CONTENT}" 0644
+    else
+        rm -f "${UNIT_DIR}/${SERVICE}" 2>/dev/null || true
+    fi
+
+    if [ "${BACKUP_TIMER_EXISTS}" = true ]; then
+        atomic_write_file "${UNIT_DIR}/${TIMER}" "${TMR_BACKUP_CONTENT}" 0644
+    else
+        rm -f "${UNIT_DIR}/${TIMER}" 2>/dev/null || true
+    fi
+    systemctl --user daemon-reload 2>/dev/null || true
+}
+
+if ! systemctl --user daemon-reload 2>/dev/null || ! systemctl --user enable --now "${TIMER}" 2>/dev/null; then
+    echo -e "${C_RED}ERROR: Failed to reload daemon or enable systemd timer.${C_RESET}" >&2
+    rollback_units
+    exit 1
+fi
 
 IS_ENABLED="$(systemctl --user is-enabled "${TIMER}" 2>/dev/null || echo "no")"
 IS_ACTIVE="$(systemctl --user is-active "${TIMER}" 2>/dev/null || echo "no")"

@@ -206,13 +206,13 @@ If your original server and its local `rclone.conf` are lost:
 
 ## Local Configuration Files
 
-Hermes Backup maintains state and credentials in the following local files:
+Hermes Backup maintains state and configuration in the following local files:
 
 - **Application State File:**  
   `${XDG_CONFIG_HOME:-$HOME/.config}/hermes-backup/state.env`  
-  *(Contains operational flags, remote names, and path settings with `0600` permissions. Contains **no** passwords or secret keys).*
+  *(Contains operational flags, remote names, path settings, and persisted `HERMES_BIN` and `HERMES_HOME` with `0600` permissions. Persisted Hermes paths are automatically reused by manual backups, manual restores, status checks, and the systemd timer. Contains **no** passwords or secret keys).*
 - **Rclone Operational Credentials:**  
-  `~/.config/rclone/rclone.conf`  
+  The authoritative location of the rclone configuration file is determined dynamically by running `rclone config file` (which may be customized via `RCLONE_CONFIG` or platform defaults).  
   *(Contains cloud OAuth tokens and obscured crypt remote configuration).*
 
 ---

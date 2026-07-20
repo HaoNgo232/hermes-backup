@@ -184,7 +184,8 @@ rclone_check_writable_probe() {
     chmod 0600 "${probe_file}" 2>/dev/null || true
     printf '%s\n' "hermes-probe-test" > "${probe_file}"
 
-    local probe_name="hermes-probe-$(date +%s%N).tmp"
+    local probe_name
+    probe_name="hermes-probe-$(date +%s%N).tmp"
     local target_probe="${endpoint}${probe_name}"
 
     local success=false

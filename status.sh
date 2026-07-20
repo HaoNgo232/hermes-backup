@@ -7,6 +7,7 @@ set -Eeuo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/lib/common.sh"
 source "${SCRIPT_DIR}/lib/state.sh"
+source "${SCRIPT_DIR}/lib/hermes.sh"
 source "${SCRIPT_DIR}/lib/rclone.sh"
 source "${SCRIPT_DIR}/lib/encryption.sh"
 
@@ -15,13 +16,11 @@ if [ "${1:-}" = "--check" ] || [ "${1:-}" = "-c" ]; then
     CHECK_ONLY=true
 fi
 
-state_load
+hermes_apply_persisted_environment
 
 HERMES_RESOLVED=""
-if [ -n "${HERMES_BIN:-}" ] && [ -x "${HERMES_BIN}" ]; then
-    HERMES_RESOLVED="${HERMES_BIN}"
-elif command -v hermes &>/dev/null; then
-    HERMES_RESOLVED="$(command -v hermes)"
+if resolved_bin="$(hermes_resolve_binary 2>/dev/null)"; then
+    HERMES_RESOLVED="${resolved_bin}"
 fi
 
 RCLONE_OK=false

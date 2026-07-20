@@ -7,6 +7,7 @@ set -Eeuo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/lib/common.sh"
 source "${SCRIPT_DIR}/lib/state.sh"
+source "${SCRIPT_DIR}/lib/hermes.sh"
 source "${SCRIPT_DIR}/lib/rclone.sh"
 source "${SCRIPT_DIR}/lib/encryption.sh"
 
@@ -93,17 +94,12 @@ check_cmd tar || MISSING=1
 check_cmd xz || MISSING=1
 check_cmd flock || MISSING=1
 
-HERMES_RESOLVED=""
-if [ -n "${HERMES_BIN:-}" ] && [ -x "${HERMES_BIN}" ]; then
-    HERMES_RESOLVED="${HERMES_BIN}"
-elif command -v hermes &>/dev/null; then
-    HERMES_RESOLVED="$(command -v hermes)"
-fi
+hermes_apply_persisted_environment
 
-if [ -n "${HERMES_RESOLVED}" ]; then
+HERMES_RESOLVED=""
+if HERMES_RESOLVED="$(hermes_resolve_binary)"; then
     echo -e "  ${BADGE_OK} Hermes binary -> ${HERMES_RESOLVED}"
 else
-    echo -e "  ${BADGE_ERR} ${C_RED}'hermes' binary not found. Add it to PATH or set HERMES_BIN=/path/to/hermes${C_RESET}" >&2
     MISSING=1
 fi
 
@@ -132,8 +128,7 @@ if ! rclone_has_remote "${REMOTE_NAME}"; then
 fi
 echo -e "  ${BADGE_OK} rclone base remote '${REMOTE_NAME}:' is configured."
 
-probe_res="$(rclone_check_reachability "${BASE_REMOTE_ONLY}" "${BASE_PATH_ONLY}")"
-if [ $? -ne 0 ]; then
+if ! rclone_check_reachability "${BASE_REMOTE_ONLY}" "${BASE_PATH_ONLY}" >/dev/null; then
     exit 1
 fi
 echo -e "  ${BADGE_OK} Base remote '${REMOTE_NAME}:' is reachable."

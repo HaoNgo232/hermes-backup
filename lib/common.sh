@@ -14,8 +14,10 @@ SCRIPT_DIR="$(cd "${COMMON_LIB_DIR}/.." && pwd)"
 
 # Application config and state paths
 APP_CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/hermes-backup"
+# shellcheck disable=SC2034
 APP_STATE_FILE="${APP_CONFIG_DIR}/state.env"
 
+# shellcheck disable=SC2034
 LOG_DIR="${SCRIPT_DIR}/logs"
 LOG_FILE="${LOG_FILE:-}"
 
@@ -35,6 +37,7 @@ if [ -t 1 ]; then
     ICON_STEP="➜"
     BADGE_OK="\033[0;32m[ OK ]\033[0m"
     BADGE_ERR="\033[0;31m[ FAIL ]\033[0m"
+    # shellcheck disable=SC2034
     BADGE_WARN="\033[0;33m[ WARN ]\033[0m"
 else
     C_RESET=""
@@ -51,6 +54,7 @@ else
     ICON_STEP="[STEP]"
     BADGE_OK="[ OK ]"
     BADGE_ERR="[ FAIL ]"
+    # shellcheck disable=SC2034
     BADGE_WARN="[ WARN ]"
 fi
 
