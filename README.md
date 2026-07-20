@@ -56,21 +56,13 @@ systemctl --user list-timers hermes-cloud-backup.timer
 
 ## 3. Khôi phục dữ liệu (Restore)
 
-Khi cần phục hồi dữ liệu Hermes trên máy hiện tại hoặc máy mới:
+Chạy 1 lệnh duy nhất để tự động tải bản backup mới nhất từ Google Drive và import:
 
-1. **Tải bản backup từ Google Drive về máy**:
-   ```bash
-   # Xem danh sách bản backup trên Drive
-   rclone lsf gdrive-hermes:HermesBackups
+```bash
+./restore.sh
+```
 
-   # Tải bản mới nhất về máy (thay tên file tương ứng)
-   rclone copyto gdrive-hermes:HermesBackups/hermes-backup-YYYYMMDD_HHMMSS.zip ./backup.zip
-   ```
-
-2. **Dùng lệnh chuẩn của Hermes để import**:
-   ```bash
-   hermes import ./backup.zip
-   ```
+*(Hoặc khôi phục một file chỉ định: `./restore.sh <tên-file-backup.zip>`)*
 
 ---
 
@@ -78,4 +70,5 @@ Khi cần phục hồi dữ liệu Hermes trên máy hiện tại hoặc máy m�
 
 ```bash
 tail -f logs/backup.log
+tail -f logs/restore.log
 ```
