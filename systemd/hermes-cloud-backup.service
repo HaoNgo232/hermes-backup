@@ -1,13 +1,15 @@
 [Unit]
 Description=Hermes Agent cloud backup (rclone -> Google Drive)
-Documentation=%h/hermes-backup/README.md
+Documentation=file://@REPO_DIR@/README.md
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=oneshot
-WorkingDirectory=%h/hermes-backup
+WorkingDirectory=@REPO_DIR@
 Environment=HERMES_HOME=%h/.hermes
-ExecStart=%h/hermes-backup/backup.sh
+Environment=HERMES_BIN=@HERMES_BIN@
+Environment=PATH=@PATH@
+ExecStart=@REPO_DIR@/backup.sh
 Nice=10
 IOSchedulingClass=idle
