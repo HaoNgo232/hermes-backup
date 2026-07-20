@@ -6,22 +6,19 @@ Automatically back up Hermes Agent data to Google Drive every four hours.
 
 ## 0. Install and Connect Google Drive (One-Time Setup)
 
-### Step 1: Clone the repository
-
-```bash
-git clone <repository-url> ~/hermes-backup
-cd ~/hermes-backup
-```
-
-### Step 2: Install required tools (rclone and shellcheck)
+### Step 1: Install required tools (rclone and shellcheck)
 
 ```bash
 sudo apt update && sudo apt install -y rclone shellcheck
 ```
 
-### Step 3: Configure the Google Drive connection
+### Step 2: Configure the Google Drive connection
 
-Run `rclone config` and select the following options in order:
+```bash
+rclone config
+```
+
+Select the following options in order:
 
 1. `n` _(New remote)_ -> Enter the name: **`gdrive-hermes`**
 2. Select storage type: enter **`drive`** _(Google Drive)_
@@ -39,6 +36,7 @@ Run `rclone config` and select the following options in order:
 ## 1. Backup
 
 ```bash
+git clone https://github.com/HaoNgo232/hermes-backup.git ~/hermes-backup
 cd ~/hermes-backup
 ./backup.sh
 ```
