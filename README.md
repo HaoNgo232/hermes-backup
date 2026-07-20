@@ -1,7 +1,3 @@
-# Hermes Backup to Google Drive
-
-Bash wrapper scripts that automate [Hermes Agent](https://github.com/NousResearch/hermes-agent) backup and restore workflows by orchestrating `hermes` CLI, `rclone`, and `systemd` user timers.
-
 ![Bash](https://img.shields.io/badge/Bash-4EAA25?logo=gnu-bash&logoColor=white)
 ![Linux](https://img.shields.io/badge/Linux-FCC624?logo=linux&logoColor=black)
 ![Google Drive](https://img.shields.io/badge/Google%20Drive-4285F4?logo=googledrive&logoColor=white)
@@ -9,6 +5,10 @@ Bash wrapper scripts that automate [Hermes Agent](https://github.com/NousResearc
 ![systemd](https://img.shields.io/badge/systemd-000000)
 ![ShellCheck](https://img.shields.io/badge/ShellCheck-passing-brightgreen)
 ![License: MIT](https://img.shields.io/badge/License-MIT-yellow)
+
+# Hermes Backup to Google Drive
+
+Bash wrapper scripts that automate [Hermes Agent](https://github.com/NousResearch/hermes-agent) backup and restore workflows by orchestrating `hermes` CLI, `rclone`, and `systemd` user timers.
 
 **What these scripts do for you:**
 
