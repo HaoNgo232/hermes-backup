@@ -4,7 +4,6 @@
 # =====================================================================
 set -Eeuo pipefail
 
-# Determine repository script directory
 COMMON_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPT_DIR="$(cd "${COMMON_LIB_DIR}/.." && pwd)"
 
@@ -16,11 +15,9 @@ APP_STATE_FILE="${APP_CONFIG_DIR}/state.env"
 mkdir -p "${APP_CONFIG_DIR}"
 chmod 0700 "${APP_CONFIG_DIR}" 2>/dev/null || true
 
-# Logging setup
-LOG_DIR="${BACKUP_LOG_DIR:-${SCRIPT_DIR}/logs}"
-mkdir -p "${LOG_DIR}"
-chmod 0700 "${LOG_DIR}" 2>/dev/null || true
-LOG_FILE="${LOG_FILE:-${LOG_DIR}/backup.log}"
+# Logging setup (LOG_FILE can be set by top-level scripts; default empty for non-logging CLI tools)
+LOG_DIR="${SCRIPT_DIR}/logs"
+LOG_FILE="${LOG_FILE:-}"
 
 # Terminal color and formatting
 if [ -t 1 ]; then
@@ -66,6 +63,10 @@ log_raw() {
     timestamp="$(date '+%Y-%m-%d %H:%M:%S')"
     echo -e "${timestamp} - $*"
     if [ -n "${LOG_FILE:-}" ]; then
+        local log_dir
+        log_dir="$(dirname "${LOG_FILE}")"
+        mkdir -p "${log_dir}"
+        chmod 0700 "${log_dir}" 2>/dev/null || true
         echo -e "${timestamp} - $*" | strip_ansi >> "${LOG_FILE}"
     fi
 }
@@ -73,7 +74,7 @@ log_raw() {
 rotate_log_file() {
     local max_lines="${MAX_LOG_LINES:-5000}"
     local keep_lines="${KEEP_LOG_LINES:-2000}"
-    if [ -f "${LOG_FILE:-}" ]; then
+    if [ -n "${LOG_FILE:-}" ] && [ -f "${LOG_FILE}" ]; then
         local current_lines
         current_lines=$(wc -l < "${LOG_FILE}" 2>/dev/null || echo 0)
         if [ "${current_lines}" -gt "${max_lines}" ]; then
@@ -133,8 +134,6 @@ check_cmd() {
 }
 
 # Atomic file write helper
-# Usage: atomic_write_file <target_filepath> <content_string> [permissions_mode]
-# Or:    echo "content" | atomic_write_file <target_filepath> "" [permissions_mode]
 atomic_write_file() {
     local target_file="$1"
     local content="${2:-}"
@@ -159,13 +158,11 @@ atomic_write_file() {
     mv -f "${tmp_file}" "${target_file}"
 }
 
-# Boolean validation helper
 is_boolean() {
     local val="$1"
     [[ "${val}" == "true" || "${val}" == "false" ]]
 }
 
-# Acquire lock file helper
 acquire_backup_lock() {
     local lock_file="$1"
     local lock_dir

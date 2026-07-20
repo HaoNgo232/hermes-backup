@@ -5,6 +5,8 @@
 set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export LOG_FILE="${BACKUP_LOG_DIR:-${SCRIPT_DIR}/logs}/backup.log"
+
 source "${SCRIPT_DIR}/lib/common.sh"
 source "${SCRIPT_DIR}/lib/state.sh"
 source "${SCRIPT_DIR}/lib/rclone.sh"
@@ -83,10 +85,10 @@ cleanup_gfs() {
     local now_epoch
     now_epoch="$(date +%s)"
 
-    local file_list
-    file_list="$(rclone_list_backups "${target_dest}")"
+    local raw_list
+    raw_list="$(rclone_list_backups "${target_dest}")"
 
-    if [ -z "${file_list}" ]; then
+    if [ -z "${raw_list}" ]; then
         log_info "No previous backups found for GFS evaluation."
         return 0
     fi
@@ -99,9 +101,13 @@ cleanup_gfs() {
     while IFS=; read -r line || [ -n "${line}" ]; do
         [ -z "${line}" ] && continue
 
-        local file_time_str file_name
-        file_time_str="$(echo "${line}" | cut -d';' -f1)"
-        file_name="$(echo "${line}" | cut -d';' -f2-)"
+        # Parse timestamp, filename, and size cleanly
+        local file_time_str="" file_name="" file_size=""
+        IFS=';' read -r file_time_str file_name file_size <<< "${line}"
+
+        if [ -z "${file_time_str}" ] || [ -z "${file_name}" ]; then
+            continue
+        fi
 
         local file_epoch
         file_epoch="$(date -d "${file_time_str}" +%s 2>/dev/null || date -j -f "%Y-%m-%dT%H:%M:%S" "${file_time_str%%.*}" +%s 2>/dev/null || echo 0)"
@@ -159,7 +165,7 @@ cleanup_gfs() {
         # Tier 5: > 90 days -> Delete
         to_delete+=("${file_name}")
 
-    done <<< "${file_list}"
+    done <<< "${raw_list}"
 
     if [ "${#to_delete[@]}" -eq 0 ]; then
         log_info "GFS retention check completed. No old backups require deletion."
@@ -193,10 +199,11 @@ TMP_EXTRACT="${WORKSPACE}/extract"
 TMP_XZ="${WORKSPACE}/${ARCHIVE_NAME}"
 
 log_step "[1/4] Generating raw Hermes export..."
-"${HERMES_RESOLVED}" export --output "${TMP_ZIP}"
+# Use hermes backup command per spec requirement
+"${HERMES_RESOLVED}" backup -o "${TMP_ZIP}" 2>/dev/null || "${HERMES_RESOLVED}" backup --output "${TMP_ZIP}" 2>/dev/null || "${HERMES_RESOLVED}" export --output "${TMP_ZIP}"
 
 if [ ! -f "${TMP_ZIP}" ]; then
-    log_error "Hermes export failed: file ${TMP_ZIP} was not created."
+    log_error "Hermes backup failed: file ${TMP_ZIP} was not created."
     exit 1
 fi
 
@@ -222,7 +229,7 @@ rclone_copy_file "${TMP_XZ}" "${TARGET_REMOTE_FILE}"
 
 log_step "Verifying remote upload integrity..."
 if ! rclone_verify_object "${TARGET_REMOTE_FILE}"; then
-    log_error "Remote verification failed: '${TARGET_REMOTE_FILE}' missing or empty on remote."
+    log_error "Remote verification failed: '${TARGET_REMOTE_FILE}' missing or zero size on remote."
     exit 1
 fi
 log_success "Remote file upload verified."

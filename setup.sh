@@ -30,8 +30,22 @@ fi
 
 state_load
 
-REMOTE_INPUT="${BACKUP_REMOTE:-$(state_get "BASE_REMOTE" "gdrive-hermes:HermesBackups")}"
-REMOTE="$(rclone_normalize_remote "${REMOTE_INPUT}")"
+INPUT_REMOTE="${BACKUP_REMOTE:-$(state_get "BASE_REMOTE" "gdrive-hermes:")}"
+REMOTE_NAME="$(rclone_get_remote_name "${INPUT_REMOTE}")"
+if [ -z "${REMOTE_NAME}" ]; then
+    REMOTE_NAME="gdrive-hermes"
+fi
+BASE_REMOTE_ONLY="${REMOTE_NAME}:"
+
+# Extract path from input remote if provided
+BASE_PATH_ONLY="$(state_get "BASE_PATH" "")"
+if [ -z "${BASE_PATH_ONLY}" ]; then
+    if [[ "${INPUT_REMOTE}" == *":"* ]]; then
+        BASE_PATH_ONLY="${INPUT_REMOTE#*:}"
+        BASE_PATH_ONLY="${BASE_PATH_ONLY#/}"
+    fi
+    [ -z "${BASE_PATH_ONLY}" ] && BASE_PATH_ONLY="HermesBackups"
+fi
 
 TOTAL_STEPS="5"
 if [ "${RUN_TEST}" = true ]; then
@@ -82,25 +96,23 @@ fi
 # ---------------------------------------------------------------------
 echo ""
 echo -e "${C_BOLD}[2/${TOTAL_STEPS}] Checking base cloud remote connectivity...${C_RESET}"
-REMOTE_NAME="$(rclone_get_remote_name "${REMOTE}")"
 
-if [ -n "${REMOTE_NAME}" ]; then
-    if ! rclone_has_remote "${REMOTE_NAME}"; then
-        echo "" >&2
-        echo -e "${C_RED}${C_BOLD}ERROR: rclone remote '${REMOTE_NAME}:' is not configured.${C_RESET}" >&2
-        echo "" >&2
-        echo "Please configure rclone by running:" >&2
-        echo -e "  ${C_CYAN}rclone config${C_RESET}" >&2
-        echo "Create a remote named '${REMOTE_NAME}' and re-run setup." >&2
-        exit 1
-    fi
-    echo -e "  ${BADGE_OK} rclone base remote '${REMOTE_NAME}:' is configured."
-
-    if ! rclone_check_remote_root "${REMOTE_NAME}"; then
-        exit 1
-    fi
-    echo -e "  ${BADGE_OK} Base remote '${REMOTE_NAME}:' is reachable."
+if ! rclone_has_remote "${REMOTE_NAME}"; then
+    echo "" >&2
+    echo -e "${C_RED}${C_BOLD}ERROR: rclone remote '${REMOTE_NAME}:' is not configured.${C_RESET}" >&2
+    echo "" >&2
+    echo "Please configure rclone by running:" >&2
+    echo -e "  ${C_CYAN}rclone config${C_RESET}" >&2
+    echo "Create a remote named '${REMOTE_NAME}' and re-run setup." >&2
+    exit 1
 fi
+echo -e "  ${BADGE_OK} rclone base remote '${REMOTE_NAME}:' is configured."
+
+probe_res="$(rclone_check_reachability "${BASE_REMOTE_ONLY}" "${BASE_PATH_ONLY}")"
+if [ $? -ne 0 ]; then
+    exit 1
+fi
+echo -e "  ${BADGE_OK} Base remote '${REMOTE_NAME}:' is reachable."
 
 # ---------------------------------------------------------------------
 # [3/5] OPTIONAL CLIENT-SIDE ENCRYPTION SETUP
@@ -110,7 +122,8 @@ echo -e "${C_BOLD}[3/${TOTAL_STEPS}] Configuring client-side encryption...${C_RE
 
 if encryption_is_enabled; then
     CRYPT_REMOTE_CUR="$(state_get "CRYPT_REMOTE")"
-    if encryption_validate_crypt_remote "${CRYPT_REMOTE_CUR}"; then
+    EXPECTED_BASE="${BASE_REMOTE_ONLY}${BASE_PATH_ONLY}"
+    if encryption_validate_crypt_remote "${CRYPT_REMOTE_CUR}" "${EXPECTED_BASE}"; then
         echo -e "  ${BADGE_OK} Client-side encryption is already configured."
         echo -e "  ${BADGE_OK} Existing crypt remote '${CRYPT_REMOTE_CUR}' was retained."
         echo -e "  ${BADGE_OK} No recovery password or salt was regenerated."
@@ -134,16 +147,23 @@ else
         fi
 
         echo -e "  ${C_CYAN}Setting up rclone crypt remote...${C_RESET}"
-        if encryption_create_crypt_remote "${REMOTE}"; then
+        if encryption_create_crypt_remote "${BASE_REMOTE_ONLY}"; then
+            if [ -z "${GEN_CRYPT_PASSWORD:-}" ] || [ -z "${GEN_CRYPT_SALT:-}" ]; then
+                log_error "Crypt remote provisioned but recovery secrets were not generated."
+                exit 1
+            fi
+
             if encryption_display_recovery_screen_and_confirm "${GEN_CRYPT_PASSWORD}" "${GEN_CRYPT_SALT}"; then
-                # Atomically update state file with encryption config
-                state_set "ENCRYPTION_ENABLED" "true"
-                state_set "ENCRYPTION_MODE" "rclone-crypt"
-                state_set "BASE_REMOTE" "${REMOTE}"
-                state_set "BASE_PATH" "${GEN_BASE_PATH}"
-                state_set "CRYPT_REMOTE" "${GEN_CRYPT_REMOTE}"
-                state_set "RECOVERY_NOTICE_STATE" "pending"
-                state_set "ENCRYPTION_SETUP_COMPLETED_AT" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+                # Write state in ONE atomic batch transaction (prevents transient invalid state)
+                state_set_many \
+                    "ENCRYPTION_ENABLED" "true" \
+                    "ENCRYPTION_MODE" "rclone-crypt" \
+                    "BASE_REMOTE" "${BASE_REMOTE_ONLY}" \
+                    "BASE_PATH" "${GEN_BASE_PATH}" \
+                    "CRYPT_REMOTE" "${GEN_CRYPT_REMOTE}" \
+                    "CRYPT_PATH" "" \
+                    "RECOVERY_NOTICE_STATE" "pending" \
+                    "ENCRYPTION_SETUP_COMPLETED_AT" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
                 echo -e "  ${BADGE_OK} Client-side encryption configured successfully."
             else
@@ -156,13 +176,15 @@ else
         fi
     else
         echo -e "  ${BADGE_OK} Client-side encryption: DISABLED (Plaintext cloud backup mode)"
-        state_set "ENCRYPTION_ENABLED" "false"
-        state_set "ENCRYPTION_MODE" "none"
-        state_set "BASE_REMOTE" "${REMOTE}"
-        state_set "BASE_PATH" "HermesBackups"
-        state_set "CRYPT_REMOTE" ""
-        state_set "CRYPT_PATH" ""
-        state_set "RECOVERY_NOTICE_STATE" "shown"
+        # Preserve existing base remote/path configuration without silent mutation
+        state_set_many \
+            "ENCRYPTION_ENABLED" "false" \
+            "ENCRYPTION_MODE" "none" \
+            "BASE_REMOTE" "${BASE_REMOTE_ONLY}" \
+            "BASE_PATH" "${BASE_PATH_ONLY}" \
+            "CRYPT_REMOTE" "" \
+            "CRYPT_PATH" "" \
+            "RECOVERY_NOTICE_STATE" "shown"
     fi
 fi
 

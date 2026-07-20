@@ -1,14 +1,17 @@
 #!/usr/bin/env bash
 # =====================================================================
-# tests/test_idempotency.sh - Idempotency & Fail-Closed Tests
+# tests/test_idempotency.sh - Extended Idempotency & Fail-Closed Tests
 # =====================================================================
 set -Eeuo pipefail
 
 TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "${TEST_DIR}/.." && pwd)"
 
+source "${TEST_DIR}/test_helpers.sh"
+
 TEST_TMP_DIR="$(mktemp -d "/tmp/hermes-idempotency-test-XXXXXX")"
 cleanup() {
+    rclone config delete hermes-backup-crypt &>/dev/null || true
     rm -rf "${TEST_TMP_DIR}" 2>/dev/null || true
 }
 trap cleanup EXIT
@@ -20,23 +23,12 @@ source "${REPO_DIR}/lib/state.sh"
 source "${REPO_DIR}/lib/rclone.sh"
 source "${REPO_DIR}/lib/encryption.sh"
 
-assert_equals() {
-    local expected="$1"
-    local actual="$2"
-    local msg="$3"
-    if [ "${expected}" != "${actual}" ]; then
-        echo -e "\033[0;31m[FAIL]\033[0m ${msg}: expected '${expected}', got '${actual}'" >&2
-        exit 1
-    else
-        echo -e "\033[0;32m[PASS]\033[0m ${msg}"
-    fi
-}
-
 echo "=== Running Idempotency & Fail-Closed Tests ==="
 
-# Test 1: Fail closed when encryption is enabled but CRYPT_REMOTE is invalid
-(
-    export XDG_CONFIG_HOME="$(mktemp -d "${TEST_TMP_DIR}/failclosed-XXXXXX")"
+# Test 1: Fail closed when encryption is enabled but CRYPT_REMOTE does not exist
+test_missing_crypt_remote() {
+    local tmp_conf="$(mktemp -d "${TEST_TMP_DIR}/fc1-XXXXXX")"
+    export XDG_CONFIG_HOME="${tmp_conf}"
     source "${REPO_DIR}/lib/common.sh"
     source "${REPO_DIR}/lib/state.sh"
     source "${REPO_DIR}/lib/rclone.sh"
@@ -50,20 +42,19 @@ ENCRYPTION_MODE=rclone-crypt
 BASE_REMOTE=gdrive-hermes:
 BASE_PATH=HermesBackupsEncrypted
 CRYPT_REMOTE=nonexistent-crypt-remote:
+CRYPT_PATH=
 RECOVERY_NOTICE_STATE=pending
 EOF
     chmod 0600 "${APP_STATE_FILE}"
 
-    # Active destination MUST fail closed and exit non-zero
-    if encryption_get_active_destination 2>/dev/null; then
-        echo -e "\033[0;31m[FAIL]\033[0m Missing crypt remote did not fail closed" >&2
-        exit 1
-    fi
-) && assert_equals "true" "true" "Missing crypt remote fails closed (blocks backup upload)"
+    encryption_get_active_destination
+}
+assert_fails "Missing crypt remote fails closed on backup" test_missing_crypt_remote
 
-# Test 2: Reminder state transition pending -> shown
-(
-    export XDG_CONFIG_HOME="$(mktemp -d "${TEST_TMP_DIR}/reminder-XXXXXX")"
+# Test 2: Encrypted restore fails closed when crypt remote does not exist
+test_missing_crypt_restore() {
+    local tmp_conf="$(mktemp -d "${TEST_TMP_DIR}/fc2-XXXXXX")"
+    export XDG_CONFIG_HOME="${tmp_conf}"
     source "${REPO_DIR}/lib/common.sh"
     source "${REPO_DIR}/lib/state.sh"
     source "${REPO_DIR}/lib/rclone.sh"
@@ -76,20 +67,68 @@ ENCRYPTION_ENABLED=true
 ENCRYPTION_MODE=rclone-crypt
 BASE_REMOTE=gdrive-hermes:
 BASE_PATH=HermesBackupsEncrypted
-CRYPT_REMOTE=gdrive-hermes:
-RECOVERY_NOTICE_STATE=pending
+CRYPT_REMOTE=nonexistent-crypt-remote:
+CRYPT_PATH=
+RECOVERY_NOTICE_STATE=shown
 EOF
     chmod 0600 "${APP_STATE_FILE}"
+
+    encryption_get_active_source
+}
+assert_fails "Missing crypt remote fails closed on restore" test_missing_crypt_restore
+
+# Test 3: Orphan crypt remote conflict detection during setup
+test_orphan_crypt_conflict() {
+    local tmp_conf="$(mktemp -d "${TEST_TMP_DIR}/orphan-XXXXXX")"
+    export XDG_CONFIG_HOME="${tmp_conf}"
+    source "${REPO_DIR}/lib/common.sh"
+    source "${REPO_DIR}/lib/state.sh"
+    source "${REPO_DIR}/lib/rclone.sh"
+    source "${REPO_DIR}/lib/encryption.sh"
+
     state_load
+    assert_equals "false" "$(encryption_is_enabled && echo "true" || echo "false")" "State is plaintext"
 
-    # Call reminder helper
-    encryption_show_first_backup_reminder_if_needed &>/dev/null
-
-    notice_after="$(state_get "RECOVERY_NOTICE_STATE")"
-    if [ "${notice_after}" != "shown" ]; then
-        echo -e "\033[0;31m[FAIL]\033[0m Reminder notice state was not updated to 'shown'" >&2
-        exit 1
+    if command -v rclone &>/dev/null; then
+        local p1="$(rclone obscure "testpass1")"
+        local p2="$(rclone obscure "testpass2")"
+        rclone config create hermes-backup-crypt crypt remote gdrive-hermes:HermesBackupsEncrypted filename_encryption standard directory_name_encryption true password "${p1}" password2 "${p2}" &>/dev/null || true
     fi
-) && assert_equals "true" "true" "Reminder notice transitions pending -> shown atomically"
+
+    encryption_create_crypt_remote "gdrive-hermes:" "hermes-backup-crypt" "HermesBackupsEncrypted"
+}
+assert_fails "Orphan crypt remote without app state rejected during setup" test_orphan_crypt_conflict
+
+# Clean up mock remote
+rclone config delete hermes-backup-crypt &>/dev/null || true
+
+# Test 4: Reminder notice transition pending -> shown
+reminder_dir="$(mktemp -d "${TEST_TMP_DIR}/rem-XXXXXX")"
+export XDG_CONFIG_HOME="${reminder_dir}"
+source "${REPO_DIR}/lib/common.sh"
+source "${REPO_DIR}/lib/state.sh"
+source "${REPO_DIR}/lib/rclone.sh"
+source "${REPO_DIR}/lib/encryption.sh"
+
+mkdir -p "${APP_CONFIG_DIR}"
+cat <<EOF > "${APP_STATE_FILE}"
+STATE_SCHEMA_VERSION=1
+ENCRYPTION_ENABLED=true
+ENCRYPTION_MODE=rclone-crypt
+BASE_REMOTE=gdrive-hermes:
+BASE_PATH=HermesBackupsEncrypted
+CRYPT_REMOTE=gdrive-hermes:
+CRYPT_PATH=
+RECOVERY_NOTICE_STATE=pending
+EOF
+chmod 0600 "${APP_STATE_FILE}"
+state_load
+
+encryption_show_first_backup_reminder_if_needed &>/dev/null
+assert_equals "shown" "$(state_get "RECOVERY_NOTICE_STATE")" "Reminder state transitions pending -> shown"
+
+# Test 5: Rerunning reminder check when already shown does not repeat
+encryption_show_first_backup_reminder_if_needed &>/dev/null
+assert_equals "shown" "$(state_get "RECOVERY_NOTICE_STATE")" "Reminder state remains shown"
 
 echo -e "\033[0;32mALL IDEMPOTENCY & FAIL-CLOSED TESTS PASSED!\033[0m"

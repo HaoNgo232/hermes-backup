@@ -28,37 +28,50 @@ RCLONE_OK=false
 REMOTE_REACHABLE_TEXT="no"
 IS_REACHABLE_RAW=false
 
-# Evaluate Encryption State & Destination
 ENCRYPTION_STATUS_OK=true
 ENC_MODE_TEXT="DISABLED"
 ENC_REASON_TEXT=""
 
 if encryption_is_enabled; then
     CRYPT_REMOTE_CUR="$(state_get "CRYPT_REMOTE")"
-    if encryption_validate_crypt_remote "${CRYPT_REMOTE_CUR}"; then
+    BASE_REMOTE_CUR="$(state_get "BASE_REMOTE")"
+    BASE_PATH_CUR="$(state_get "BASE_PATH" "HermesBackupsEncrypted")"
+    EXPECTED_BASE="${BASE_REMOTE_CUR%/:}/${BASE_PATH_CUR}"
+
+    if encryption_validate_crypt_remote "${CRYPT_REMOTE_CUR}" "${EXPECTED_BASE}"; then
         ENC_MODE_TEXT="ENABLED"
-        ACTIVE_DEST="${CRYPT_REMOTE_CUR}"
+        ACTIVE_REMOTE="${CRYPT_REMOTE_CUR}"
+        ACTIVE_PATH="$(state_get "CRYPT_PATH" "")"
     else
         ENC_MODE_TEXT="ERROR"
         ENCRYPTION_STATUS_OK=false
         ENC_REASON_TEXT="configured crypt remote '${CRYPT_REMOTE_CUR}' is unavailable, invalid, or inconsistent."
-        ACTIVE_DEST="${CRYPT_REMOTE_CUR}"
+        ACTIVE_REMOTE="${CRYPT_REMOTE_CUR}"
+        ACTIVE_PATH=""
     fi
 else
     ENC_MODE_TEXT="DISABLED"
-    BASE_REMOTE_CUR="$(state_get "BASE_REMOTE" "${BACKUP_REMOTE:-gdrive-hermes:HermesBackups}")"
-    ACTIVE_DEST="$(rclone_normalize_remote "${BASE_REMOTE_CUR}")"
+    BASE_REMOTE_CUR="$(state_get "BASE_REMOTE" "${BACKUP_REMOTE:-gdrive-hermes:}")"
+    BASE_PATH_CUR="$(state_get "BASE_PATH" "HermesBackups")"
+    ACTIVE_REMOTE="${BASE_REMOTE_CUR}"
+    ACTIVE_PATH="${BASE_PATH_CUR}"
 fi
+
+ACTIVE_ENDPOINT="$(rclone_compose_endpoint "${ACTIVE_REMOTE}" "${ACTIVE_PATH}")"
 
 if command -v rclone &>/dev/null; then
     RCLONE_OK=true
     if [ "${ENCRYPTION_STATUS_OK}" = true ]; then
-        if rclone_check_path_reachable "${ACTIVE_DEST}"; then
+        reach_status="$(rclone_check_reachability "${ACTIVE_REMOTE}" "${ACTIVE_PATH}" 2>/dev/null || echo "FAILED")"
+        if [ "${reach_status}" = "EXISTS" ]; then
             REMOTE_REACHABLE_TEXT="${BADGE_OK} yes"
             IS_REACHABLE_RAW=true
-        else
-            REMOTE_REACHABLE_TEXT="${BADGE_OK} yes (reachable; target folder created on upload)"
+        elif [ "${reach_status}" = "CREATED_ON_UPLOAD" ]; then
+            REMOTE_REACHABLE_TEXT="${BADGE_OK} yes (remote reachable; target folder created on upload)"
             IS_REACHABLE_RAW=true
+        else
+            REMOTE_REACHABLE_TEXT="${BADGE_ERR} no (cannot connect to remote '${ACTIVE_REMOTE}')"
+            IS_REACHABLE_RAW=false
         fi
     else
         REMOTE_REACHABLE_TEXT="${BADGE_ERR} no (${ENC_REASON_TEXT})"
@@ -72,7 +85,7 @@ fi
 # Pre-fetch latest backup if reachable
 LATEST_BACKUP=""
 if [ "${IS_REACHABLE_RAW}" = true ] && [ "${RCLONE_OK}" = true ] && [ "${ENCRYPTION_STATUS_OK}" = true ]; then
-    LATEST_BACKUP="$(rclone_list_backups "${ACTIVE_DEST}" | tail -n1 || true)"
+    LATEST_BACKUP="$(rclone_list_backups "${ACTIVE_ENDPOINT}" | tail -n1 || true)"
 fi
 
 # Systemd timer checks
@@ -102,7 +115,6 @@ if command -v systemctl &>/dev/null && systemctl --user status &>/dev/null; then
     SERVICE_STATUS_TEXT="$(systemctl --user is-failed hermes-cloud-backup.service 2>/dev/null || echo "unknown")"
 fi
 
-# Overall Health Evaluation
 HEALTH_OK=true
 if [ -z "${HERMES_RESOLVED}" ] || [ "${RCLONE_OK}" = false ] || [ "${IS_REACHABLE_RAW}" = false ] || \
    [ "${ENCRYPTION_STATUS_OK}" = false ] || [ "${SYSTEMD_OK}" = false ] || [ "${UNITS_EXIST}" = false ] || \
@@ -110,9 +122,6 @@ if [ -z "${HERMES_RESOLVED}" ] || [ "${RCLONE_OK}" = false ] || [ "${IS_REACHABL
     HEALTH_OK=false
 fi
 
-# ---------------------------------------------------------------------
-# OUTPUT FOR --check MODE
-# ---------------------------------------------------------------------
 if [ "${CHECK_ONLY}" = true ]; then
     if [ "${HEALTH_OK}" = true ]; then
         echo -e "${C_GREEN}${C_BOLD}OVERALL STATUS: HEALTHY${C_RESET}"
@@ -123,15 +132,11 @@ if [ "${CHECK_ONLY}" = true ]; then
     fi
 fi
 
-# ---------------------------------------------------------------------
-# FULL RENDER OUTPUT
-# ---------------------------------------------------------------------
 echo -e "${C_CYAN}${C_BOLD}=====================================================================${C_RESET}"
 echo -e "${C_CYAN}${C_BOLD}                  HERMES BACKUP SYSTEM STATUS                        ${C_RESET}"
 echo -e "${C_CYAN}${C_BOLD}=====================================================================${C_RESET}"
 echo -e "${C_CYAN}ℹ Checking system status & remote connectivity...${C_RESET}\n"
 
-# 1. Environment & Config
 echo -e "${C_BOLD}[1] Environment & Configuration:${C_RESET}"
 echo "  Repository Path  : ${SCRIPT_DIR}"
 echo "  Backup Script    : ${SCRIPT_DIR}/backup.sh"
@@ -144,18 +149,17 @@ else
     echo -e "  Hermes Binary    : ${C_RED}NOT FOUND (hermes command not in PATH)${C_RESET}"
 fi
 
-# 2. Encryption Status Report
 echo ""
 echo -e "${C_BOLD}[2] Encryption Status:${C_RESET}"
 if [ "${ENC_MODE_TEXT}" = "ENABLED" ]; then
     echo "  Encryption Mode  : ENABLED"
     echo "  Backend          : rclone crypt"
-    echo "  Crypt Remote     : ${ACTIVE_DEST}"
+    echo "  Crypt Remote     : ${ACTIVE_ENDPOINT}"
     echo "  Data Security    : Client-side encrypted content & filenames"
     echo "  Recovery Notice  : $(state_get "RECOVERY_NOTICE_STATE" "shown")"
 elif [ "${ENC_MODE_TEXT}" = "DISABLED" ]; then
     echo "  Encryption Mode  : DISABLED"
-    echo "  Cloud Destination: ${ACTIVE_DEST}"
+    echo "  Cloud Destination: ${ACTIVE_ENDPOINT}"
 else
     echo -e "  Encryption Mode  : ${C_RED}ERROR${C_RESET}"
     echo -e "  Reason           : ${C_RED}${ENC_REASON_TEXT}${C_RESET}"
@@ -164,7 +168,6 @@ fi
 
 echo -e "  Remote Reachable : ${REMOTE_REACHABLE_TEXT}"
 
-# 3. Systemd Status
 echo ""
 echo -e "${C_BOLD}[3] Systemd Timer & Service Status:${C_RESET}"
 
@@ -194,13 +197,10 @@ if [ "${SYSTEMD_OK}" = true ]; then
     fi
 fi
 
-# 4. Latest Backup Status
 echo ""
 echo -e "${C_BOLD}[4] Latest Cloud Backup:${C_RESET}"
 if [ -n "${LATEST_BACKUP}" ]; then
-    b_time="$(echo "${LATEST_BACKUP}" | cut -d';' -f1)"
-    b_file="$(echo "${LATEST_BACKUP}" | cut -d';' -f2)"
-    b_size="$(echo "${LATEST_BACKUP}" | cut -d';' -f3)"
+    IFS=';' read -r b_time b_file b_size <<< "${LATEST_BACKUP}"
     echo "  Filename         : ${b_file}"
     echo "  Timestamp        : ${b_time}"
     echo "  Archive Size     : ${b_size} bytes"

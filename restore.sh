@@ -5,6 +5,8 @@
 set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export LOG_FILE="${RESTORE_LOG_DIR:-${SCRIPT_DIR}/logs}/restore.log"
+
 source "${SCRIPT_DIR}/lib/common.sh"
 source "${SCRIPT_DIR}/lib/state.sh"
 source "${SCRIPT_DIR}/lib/rclone.sh"
@@ -50,10 +52,14 @@ TARGET_FILE="${1:-}"
 if [ -z "${TARGET_FILE}" ]; then
     log_info "Querying active source (${SOURCE}) for the latest backup..."
 
-    list_output="$(rclone_list_backups "${SOURCE}")"
-    TARGET_FILE="$(echo "${list_output}" | grep -E ';hermes-backup-.*\.(tar\.xz|zip)$' | sort | tail -n1 | cut -d';' -f2- || true)"
+    raw_list="$(rclone_list_backups "${SOURCE}")"
+    latest_entry="$(echo "${raw_list}" | tail -n1 || true)"
 
-    if [ -z "${TARGET_FILE}" ]; then
+    if [ -n "${latest_entry}" ]; then
+        IFS=';' read -r _t_str TARGET_FILE _s_bytes <<< "${latest_entry}"
+    fi
+
+    if [ -z "${TARGET_FILE:-}" ]; then
         log_error "No backup files matching 'hermes-backup-*' were found on active source (${SOURCE})."
         exit 1
     fi

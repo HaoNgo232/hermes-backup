@@ -35,8 +35,9 @@ encryption_is_crypt_remote() {
 
 encryption_validate_crypt_remote() {
     local crypt_remote="$1"
-    local remote_name="${crypt_remote%%:*}"
+    local expected_base_target="${2:-}"
 
+    local remote_name="${crypt_remote%%:*}"
     if [ -z "${remote_name}" ]; then
         log_error "Crypt remote string '${crypt_remote}' is invalid."
         return 1
@@ -52,23 +53,54 @@ encryption_validate_crypt_remote() {
         return 1
     fi
 
-    # Verify crypt remote connectivity/reachability
-    if ! rclone_check_path_reachable "${crypt_remote}"; then
-        # Try checking if root of crypt remote works or target directory will be created
-        if ! rclone lsf "${crypt_remote}" --max-depth 1 &>/dev/null; then
-            log_error "Crypt remote '${crypt_remote}' is unreachable or invalid."
+    local show_config
+    show_config="$(rclone config show "${remote_name}" 2>/dev/null || echo "")"
+
+    # Validate crypt parameters per spec Section 7.2
+    if ! echo "${show_config}" | grep -i -q "filename_encryption = standard"; then
+        log_error "Crypt remote '${remote_name}:' does not have 'filename_encryption = standard'."
+        return 1
+    fi
+
+    if ! echo "${show_config}" | grep -i -q "directory_name_encryption = true"; then
+        log_error "Crypt remote '${remote_name}:' does not have 'directory_name_encryption = true'."
+        return 1
+    fi
+
+    # Validate target remote mapping if expected base target is specified
+    if [ -n "${expected_base_target}" ]; then
+        local configured_target
+        configured_target="$(echo "${show_config}" | grep -i "^remote =" | cut -d'=' -f2- | xargs || echo "")"
+        local expected_norm
+        expected_norm="${expected_base_target%/}"
+        local configured_norm
+        configured_norm="${configured_target%/}"
+
+        if [ "${configured_norm}" != "${expected_norm}" ]; then
+            log_error "Crypt remote '${remote_name}:' points to '${configured_target}' but state expects '${expected_base_target}'."
             return 1
         fi
+    fi
+
+    # Verify reachability probe
+    if ! rclone lsf "${remote_name}:" --max-depth 1 &>/dev/null; then
+        log_error "Crypt remote '${remote_name}:' is unreachable or failed authorization."
+        return 1
     fi
 
     return 0
 }
 
+# Reliable 32-character random secret generator with urandom fallback loop
 encryption_generate_secret() {
     if command -v openssl &>/dev/null; then
-        openssl rand -base64 32 | tr -dc 'a-zA-Z0-9' | head -c 32
+        openssl rand -base64 48 | tr -dc 'a-zA-Z0-9' | head -c 32
     else
-        head -c 64 /dev/urandom | tr -dc 'a-zA-Z0-9' | head -c 32
+        local sec=""
+        while [ "${#sec}" -lt 32 ]; do
+            sec+=$(head -c 128 /dev/urandom | tr -dc 'a-zA-Z0-9' || true)
+        done
+        echo "${sec:0:32}"
     fi
 }
 
@@ -77,7 +109,6 @@ encryption_create_crypt_remote() {
     local crypt_remote_name="${2:-${DEFAULT_CRYPT_REMOTE_NAME}}"
     local crypt_folder="${3:-${DEFAULT_CRYPT_FOLDER}}"
 
-    # Standardize base remote
     local base_remote_name
     base_remote_name="$(rclone_get_remote_name "${base_remote}")"
 
@@ -86,21 +117,39 @@ encryption_create_crypt_remote() {
         return 1
     fi
 
-    # Verify base remote reachability
+    # Check base remote connectivity
     if ! rclone_check_remote_root "${base_remote_name}"; then
         log_error "Base remote '${base_remote_name}:' is unreachable. Cannot setup encryption."
         return 1
     fi
 
-    # Check for existing conflicting remote name
+    local base_target_endpoint="${base_remote_name}:${crypt_folder}"
+
+    # Writable probe on base remote per spec Section 7.3
+    if ! rclone_check_writable_probe "${base_remote_name}:${crypt_folder}/"; then
+        log_error "Base remote target '${base_target_endpoint}' is not writable."
+        return 1
+    fi
+
+    # Check for existing crypt remote (Idempotency matrix Section 8.1)
     if rclone_has_remote "${crypt_remote_name}"; then
-        if encryption_is_crypt_remote "${crypt_remote_name}"; then
-            log_warn "Crypt remote '${crypt_remote_name}:' already exists in rclone configuration."
-            return 0
-        else
-            log_error "A non-crypt rclone remote named '${crypt_remote_name}:' already exists."
-            return 1
+        if encryption_is_enabled; then
+            local current_crypt="$(state_get "CRYPT_REMOTE")"
+            if [ "${current_crypt%%:*}" = "${crypt_remote_name}" ]; then
+                log_warn "Crypt remote '${crypt_remote_name}:' already configured for application state."
+                GEN_CRYPT_PASSWORD=""
+                GEN_CRYPT_SALT=""
+                GEN_CRYPT_REMOTE="${crypt_remote_name}:"
+                GEN_BASE_PATH="${crypt_folder}"
+                return 0
+            fi
         fi
+
+        # Orphan crypt remote exists but app state does not (must fail closed per spec Section 8.1)
+        log_error "[ERR] rclone remote '${crypt_remote_name}:' already exists, but application state is not configured for encryption."
+        log_error "[ERR] Setup will not overwrite or adopt an existing unlinked crypt remote automatically."
+        log_info "[INFO] Please remove or rename '${crypt_remote_name}:' in rclone.conf or repair state.env manually."
+        return 1
     fi
 
     # Generate random recovery material
@@ -114,23 +163,20 @@ encryption_create_crypt_remote() {
     obs_password="$(rclone obscure "${plain_password}")"
     obs_salt="$(rclone obscure "${plain_salt}")"
 
-    local base_target_path="${base_remote_name}:${crypt_folder}"
-
     # Create crypt remote via rclone config create
     rclone config create "${crypt_remote_name}" crypt \
-        remote "${base_target_path}" \
+        remote "${base_target_endpoint}" \
         filename_encryption standard \
         directory_name_encryption true \
         password "${obs_password}" \
         password2 "${obs_salt}" &>/dev/null
 
-    # Validate crypt remote creation succeeded
-    if ! rclone_has_remote "${crypt_remote_name}" || ! encryption_is_crypt_remote "${crypt_remote_name}"; then
-        log_error "Failed to create rclone crypt remote '${crypt_remote_name}:'."
+    # Validate resulting remote
+    if ! encryption_validate_crypt_remote "${crypt_remote_name}:" "${base_target_endpoint}"; then
+        log_error "Failed to validate newly created rclone crypt remote '${crypt_remote_name}:'."
         return 1
     fi
 
-    # Expose generated secrets safely to caller via global variables in memory only
     GEN_CRYPT_PASSWORD="${plain_password}"
     GEN_CRYPT_SALT="${plain_salt}"
     GEN_CRYPT_REMOTE="${crypt_remote_name}:"
@@ -229,31 +275,53 @@ This reminder is shown only once.
             echo "${reminder_msg}" >> "${LOG_FILE}"
         fi
 
-        # Atomically mark notice state as shown
+        # Atomically update reminder state
         state_set "RECOVERY_NOTICE_STATE" "shown"
     fi
 }
 
-encryption_get_active_destination() {
+# Resolve active endpoint with distinct Operation context ("backup" vs "restore")
+encryption_get_active_endpoint() {
+    local op="${1:-backup}"
     state_load
+
     if encryption_is_enabled; then
         local crypt_remote
         crypt_remote="$(state_get "CRYPT_REMOTE")"
+        local crypt_path
+        crypt_path="$(state_get "CRYPT_PATH" "")"
+        local base_remote
+        base_remote="$(state_get "BASE_REMOTE")"
+        local base_path
+        base_path="$(state_get "BASE_PATH" "${DEFAULT_CRYPT_FOLDER}")"
 
-        if [ -z "${crypt_remote}" ] || ! encryption_validate_crypt_remote "${crypt_remote}"; then
-            log_error "[ERR] Encryption is enabled, but the configured crypt remote is unavailable."
-            log_error "[ERR] Backup was not uploaded to prevent an accidental plaintext cloud upload."
-            log_info "[INFO] Restore the rclone configuration or repair the crypt remote using the saved recovery material."
+        local expected_base_target="${base_remote%/:}/${base_path}"
+
+        if [ -z "${crypt_remote}" ] || ! encryption_validate_crypt_remote "${crypt_remote}" "${expected_base_target}"; then
+            if [ "${op}" = "restore" ]; then
+                log_error "[ERR] Encrypted backup restore cannot continue because the configured crypt remote is unavailable."
+                log_info "[INFO] Restore the rclone configuration or recreate the crypt remote using the saved recovery password and recovery salt."
+            else
+                log_error "[ERR] Encryption is enabled, but the configured crypt remote is unavailable."
+                log_error "[ERR] Backup was not uploaded to prevent an accidental plaintext cloud upload."
+                log_info "[INFO] Restore the rclone configuration or repair the crypt remote using the saved recovery material."
+            fi
             exit 1
         fi
-        echo "${crypt_remote}"
+        rclone_compose_endpoint "${crypt_remote}" "${crypt_path}"
     else
         local base_remote
-        base_remote="$(state_get "BASE_REMOTE" "${BACKUP_REMOTE:-gdrive-hermes:HermesBackups}")"
-        echo "$(rclone_normalize_remote "${base_remote}")"
+        base_remote="$(state_get "BASE_REMOTE" "${BACKUP_REMOTE:-gdrive-hermes:}")"
+        local base_path
+        base_path="$(state_get "BASE_PATH" "HermesBackups")"
+        rclone_compose_endpoint "${base_remote}" "${base_path}"
     fi
 }
 
+encryption_get_active_destination() {
+    encryption_get_active_endpoint "backup"
+}
+
 encryption_get_active_source() {
-    encryption_get_active_destination
+    encryption_get_active_endpoint "restore"
 }
