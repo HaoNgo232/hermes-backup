@@ -10,10 +10,73 @@ LOG_DIR="${RESTORE_LOG_DIR:-${SCRIPT_DIR}/logs}"
 mkdir -p "${LOG_DIR}"
 LOG_FILE="${LOG_DIR}/restore.log"
 
-log() {
-    echo "$(date '+%Y-%m-%d %H:%M:%S') - $*" | tee -a "${LOG_FILE}"
+# ---------------------------------------------------------------------
+# LOGGING & COLOR FORMATTING UTILITY
+# ---------------------------------------------------------------------
+if [ -t 1 ]; then
+    C_RESET="\033[0m"
+    C_BOLD="\033[1m"
+    C_RED="\033[0;31m"
+    C_GREEN="\033[0;32m"
+    C_YELLOW="\033[0;33m"
+    C_BLUE="\033[0;34m"
+    C_CYAN="\033[0;36m"
+    ICON_OK="✔"
+    ICON_ERR="✖"
+    ICON_WARN="⚠"
+    ICON_INFO="ℹ"
+    ICON_STEP="➜"
+else
+    C_RESET=""
+    C_BOLD=""
+    C_RED=""
+    C_GREEN=""
+    C_YELLOW=""
+    C_BLUE=""
+    C_CYAN=""
+    ICON_OK="[OK]"
+    ICON_ERR="[ERR]"
+    ICON_WARN="[WARN]"
+    ICON_INFO="[INFO]"
+    ICON_STEP="[STEP]"
+fi
+
+strip_ansi() {
+    sed -E 's/\x1B\[[0-9;]*[a-zA-Z]//g'
 }
 
+log_raw() {
+    local timestamp
+    timestamp="$(date '+%Y-%m-%d %H:%M:%S')"
+    echo -e "${timestamp} - $*"
+    if [ -n "${LOG_FILE:-}" ]; then
+        echo -e "${timestamp} - $*" | strip_ansi >> "${LOG_FILE}"
+    fi
+}
+
+log_info() {
+    log_raw "${C_BLUE}${ICON_INFO}${C_RESET} $*"
+}
+
+log_success() {
+    log_raw "${C_GREEN}${ICON_OK}${C_RESET} ${C_GREEN}$*${C_RESET}"
+}
+
+log_warn() {
+    log_raw "${C_YELLOW}${ICON_WARN}${C_RESET} ${C_YELLOW}$*${C_RESET}"
+}
+
+log_error() {
+    log_raw "${C_RED}${ICON_ERR}${C_RESET} ${C_RED}$*${C_RESET}"
+}
+
+log_step() {
+    log_raw "${C_CYAN}${C_BOLD}${ICON_STEP} $*${C_RESET}"
+}
+
+# ---------------------------------------------------------------------
+# CONFIGURATION & PREFLIGHT
+# ---------------------------------------------------------------------
 REMOTE="${BACKUP_REMOTE:-gdrive-hermes:HermesBackups}"
 
 case "${REMOTE}" in
@@ -22,14 +85,13 @@ case "${REMOTE}" in
     *) REMOTE="${REMOTE}/" ;;
 esac
 
-# ---------------------------------------------------------------------
-# PREFLIGHT CHECKS
-# ---------------------------------------------------------------------
+log_step "[1/3] Preflight checks & backup resolution..."
+
 require_command() {
     local cmd="$1"
     if ! command -v "${cmd}" &>/dev/null; then
-        log "ERROR: Missing required command: '${cmd}'"
-        log "Please install '${cmd}' and try again."
+        log_error "Missing required command: '${cmd}'"
+        log_error "Please install '${cmd}' and try again."
         exit 1
     fi
 }
@@ -48,14 +110,12 @@ elif command -v hermes &>/dev/null; then
 fi
 
 if [ -z "${HERMES_RESOLVED}" ]; then
-    log "ERROR: 'hermes' binary not found. Set HERMES_BIN=/path/to/hermes or add it to PATH."
+    log_error "'hermes' binary not found. Set HERMES_BIN=/path/to/hermes or add it to PATH."
     exit 1
 fi
-log "Using Hermes binary: ${HERMES_RESOLVED}"
+log_info "Using Hermes binary: ${HERMES_RESOLVED}"
 
-# ---------------------------------------------------------------------
-# WORKSPACE & CLEANUP
-# ---------------------------------------------------------------------
+# Workspace setup
 WORKSPACE="$(mktemp -d "${TMPDIR:-/tmp}/hermes-restore-XXXXXX")"
 cleanup() {
     if [ -n "${WORKSPACE}" ] && [ -d "${WORKSPACE}" ]; then
@@ -64,71 +124,77 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# ---------------------------------------------------------------------
-# TARGET FILE RESOLUTION
-# ---------------------------------------------------------------------
+# Target file resolution
 TARGET_FILE="${1:-}"
 
 if [ -z "${TARGET_FILE}" ]; then
-    log "Querying Google Drive (${REMOTE}) for the latest backup..."
+    log_info "Querying Google Drive (${REMOTE}) for the latest backup..."
     
     list_output=""
     if ! list_output="$(rclone lsf "${REMOTE}" --format "tp" --files-only 2>&1)"; then
-        log "ERROR: Failed to query remote '${REMOTE}'."
-        log "ERROR: rclone output: ${list_output}"
+        log_error "Failed to query remote '${REMOTE}'."
+        log_error "rclone output: ${list_output}"
         exit 1
     fi
 
     TARGET_FILE="$(echo "${list_output}" | grep -E ';hermes-backup-.*\.(tar\.xz|zip)$' | sort | tail -n1 | cut -d';' -f2- || true)"
     
     if [ -z "${TARGET_FILE}" ]; then
-        log "ERROR: No backup files matching 'hermes-backup-*' were found on Google Drive (${REMOTE})."
+        log_error "No backup files matching 'hermes-backup-*' were found on Google Drive (${REMOTE})."
         exit 1
     fi
-    log "Latest backup identified: ${TARGET_FILE}"
+    log_success "Latest backup identified: ${TARGET_FILE}"
+else
+    log_info "Target backup specified manually: ${TARGET_FILE}"
 fi
 
 # ---------------------------------------------------------------------
 # DOWNLOAD & VERIFICATION
 # ---------------------------------------------------------------------
+log_step "[2/3] Downloading & preparing backup files..."
 TMP_FILE="${WORKSPACE}/${TARGET_FILE}"
 TMP_DIR="${WORKSPACE}/extract"
 TMP_ZIP="${WORKSPACE}/import_target.zip"
 
-log "Downloading backup '${TARGET_FILE}' from Google Drive (${REMOTE}${TARGET_FILE})..."
+log_info "Downloading backup '${TARGET_FILE}' from ${REMOTE}${TARGET_FILE}..."
 if ! rclone copyto "${REMOTE}${TARGET_FILE}" "${TMP_FILE}"; then
-    log "ERROR: Download command failed for file ${TARGET_FILE}"
+    log_error "Download command failed for file ${TARGET_FILE}"
     exit 1
 fi
 
 if [ ! -f "${TMP_FILE}" ]; then
-    log "ERROR: Downloaded backup file was not found at ${TMP_FILE}"
+    log_error "Downloaded backup file was not found at ${TMP_FILE}"
     exit 1
 fi
 
 dl_bytes=$(stat -c%s "${TMP_FILE}" 2>/dev/null || du -b "${TMP_FILE}" | cut -f1)
 if [ "${dl_bytes}" -le 0 ]; then
-    log "ERROR: Downloaded backup file ${TARGET_FILE} is empty (0 bytes)."
+    log_error "Downloaded backup file ${TARGET_FILE} is empty (0 bytes)."
     exit 1
 fi
 
-log "Download complete (${dl_bytes} bytes). Preparing files for 'hermes import'..."
+log_success "Download complete (${dl_bytes} bytes)."
 
-# ---------------------------------------------------------------------
-# RESTORE IMPORT
-# ---------------------------------------------------------------------
 if [[ "${TARGET_FILE}" == *.tar.xz ]]; then
-    log "Decompressing .tar.xz archive..."
+    log_info "Decompressing .tar.xz archive..."
     mkdir -p "${TMP_DIR}"
     tar -xf "${TMP_FILE}" -C "${TMP_DIR}"
     (cd "${TMP_DIR}" && zip -r -q "${TMP_ZIP}" .)
     IMPORT_TARGET="${TMP_ZIP}"
 else
-    log "Using .zip archive directly for restore."
+    log_info "Using .zip archive directly for restore."
     IMPORT_TARGET="${TMP_FILE}"
 fi
 
-log "WARNING: Starting destructive restore operation with 'hermes import --force'..."
-"${HERMES_RESOLVED}" import --force "${IMPORT_TARGET}"
+# ---------------------------------------------------------------------
+# RESTORE IMPORT
+# ---------------------------------------------------------------------
+log_step "[3/3] Restoring database with 'hermes import'..."
+log_warn "Starting destructive restore operation with '${HERMES_RESOLVED} import --force'..."
 
-log "Restore completed successfully from backup '${TARGET_FILE}'."
+if "${HERMES_RESOLVED}" import --force "${IMPORT_TARGET}"; then
+    log_success "Restore completed successfully from backup '${TARGET_FILE}'!"
+else
+    log_error "Hermes import command failed."
+    exit 1
+fi

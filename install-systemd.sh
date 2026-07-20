@@ -8,8 +8,28 @@
 set -Eeuo pipefail
 umask 077
 
+if [ -t 1 ]; then
+    C_RESET="\033[0m"
+    C_BOLD="\033[1m"
+    C_RED="\033[0;31m"
+    C_GREEN="\033[0;32m"
+    C_YELLOW="\033[0;33m"
+    C_CYAN="\033[0;36m"
+    FMT_OK="\033[0;32m[ OK ]\033[0m"
+    FMT_WARN="\033[0;33m[ WARN ]\033[0m"
+else
+    C_RESET=""
+    C_BOLD=""
+    C_RED=""
+    C_GREEN=""
+    C_YELLOW=""
+    C_CYAN=""
+    FMT_OK="[ OK ]"
+    FMT_WARN="[ WARN ]"
+fi
+
 if [ "$(id -u)" -eq 0 ]; then
-    echo "ERROR: Refusing to run as root. Run as regular user." >&2
+    echo -e "${C_RED}ERROR: Refusing to run as root. Run as regular user.${C_RESET}" >&2
     exit 1
 fi
 
@@ -22,25 +42,25 @@ TIMER="hermes-cloud-backup.timer"
 # PREFLIGHT CHECKS
 # ---------------------------------------------------------------------
 if ! command -v systemctl &>/dev/null; then
-    echo "ERROR: 'systemctl' command not found. Systemd is required to install the backup timer." >&2
+    echo -e "${C_RED}ERROR: 'systemctl' command not found. Systemd is required to install the backup timer.${C_RESET}" >&2
     exit 1
 fi
 
 if ! systemctl --user status &>/dev/null && ! systemctl --user show-environment &>/dev/null; then
-    echo "ERROR: Cannot connect to systemd user manager ('systemctl --user')." >&2
+    echo -e "${C_RED}ERROR: Cannot connect to systemd user manager ('systemctl --user').${C_RESET}" >&2
     echo "Make sure you are logged into an active systemd user session." >&2
     echo "For unattended operation after logout/reboot, enable linger separately." >&2
     exit 1
 fi
 
 if [ ! -x "${SRC_DIR}/backup.sh" ]; then
-    echo "ERROR: '${SRC_DIR}/backup.sh' is missing or not executable." >&2
+    echo -e "${C_RED}ERROR: '${SRC_DIR}/backup.sh' is missing or not executable.${C_RESET}" >&2
     echo "Run 'chmod +x ${SRC_DIR}/backup.sh' first." >&2
     exit 1
 fi
 
 if [ ! -f "${SRC_DIR}/systemd/${SERVICE}" ] || [ ! -f "${SRC_DIR}/systemd/${TIMER}" ]; then
-    echo "ERROR: Systemd unit templates missing in '${SRC_DIR}/systemd/'." >&2
+    echo -e "${C_RED}ERROR: Systemd unit templates missing in '${SRC_DIR}/systemd/'.${C_RESET}" >&2
     exit 1
 fi
 
@@ -53,7 +73,7 @@ elif command -v hermes &>/dev/null; then
 fi
 
 if [ -z "${HERMES_RESOLVED}" ]; then
-    echo "ERROR: 'hermes' executable not found in PATH or HERMES_BIN environment variable." >&2
+    echo -e "${C_RED}ERROR: 'hermes' executable not found in PATH or HERMES_BIN environment variable.${C_RESET}" >&2
     echo "Please ensure Hermes is installed or set HERMES_BIN=/path/to/hermes before running installer." >&2
     exit 1
 fi
@@ -61,9 +81,8 @@ fi
 HERMES_DIR="$(dirname "${HERMES_RESOLVED}")"
 EXPLICIT_PATH="${HERMES_DIR}:${HOME}/.local/bin:/usr/local/bin:/usr/bin:/bin"
 
-# Ensure no newlines in path values before sed replacement
 if [[ "${SRC_DIR}" == *$'\n'* ]] || [[ "${HERMES_RESOLVED}" == *$'\n'* ]]; then
-    echo "ERROR: Path contains invalid characters (newline)." >&2
+    echo -e "${C_RED}ERROR: Path contains invalid characters (newline).${C_RESET}" >&2
     exit 1
 fi
 
@@ -72,7 +91,6 @@ fi
 # ---------------------------------------------------------------------
 mkdir -p "${UNIT_DIR}"
 
-# Helper function to escape sed replacement string
 escape_sed() {
     printf '%s\n' "$1" | sed -e 's/[\/&]/\\&/g'
 }
@@ -93,8 +111,8 @@ sed -e "s/@REPO_DIR@/${REPO_DIR_ESC}/g" \
     "${SRC_DIR}/systemd/${TIMER}" > "${UNIT_DIR}/${TIMER}"
 chmod 644 "${UNIT_DIR}/${TIMER}"
 
-echo "Installed service: ${UNIT_DIR}/${SERVICE}"
-echo "Installed timer:   ${UNIT_DIR}/${TIMER}"
+echo -e "  ${FMT_OK} Installed service: ${UNIT_DIR}/${SERVICE}"
+echo -e "  ${FMT_OK} Installed timer:   ${UNIT_DIR}/${TIMER}"
 
 # ---------------------------------------------------------------------
 # DAEMON RELOAD AND ACTIVATE
@@ -109,15 +127,15 @@ IS_ENABLED="$(systemctl --user is-enabled "${TIMER}" 2>/dev/null || echo "no")"
 IS_ACTIVE="$(systemctl --user is-active "${TIMER}" 2>/dev/null || echo "no")"
 
 echo ""
-echo "=== Systemd Timer Status ==="
-echo "Timer enabled : ${IS_ENABLED}"
-echo "Timer active  : ${IS_ACTIVE}"
+echo -e "${C_BOLD}=== Systemd Timer Status ===${C_RESET}"
+echo -e "Timer enabled : ${C_GREEN}${IS_ENABLED}${C_RESET}"
+echo -e "Timer active  : ${C_GREEN}${IS_ACTIVE}${C_RESET}"
 
 if [ "${IS_ENABLED}" = "enabled" ] && [ "${IS_ACTIVE}" = "active" ]; then
     echo "Next trigger  :"
     systemctl --user list-timers "${TIMER}" --no-pager || true
 else
-    echo "WARNING: Timer installation finished but timer state is enabled=${IS_ENABLED}, active=${IS_ACTIVE}." >&2
+    echo -e "${FMT_WARN} ${C_YELLOW}Timer installation finished but timer state is enabled=${IS_ENABLED}, active=${IS_ACTIVE}.${C_RESET}" >&2
     exit 1
 fi
 
@@ -137,14 +155,14 @@ fi
 
 if [ "${LINGER_STATUS}" = "disabled" ]; then
     echo ""
-    echo "WARNING: User linger is NOT enabled for user '$USER'."
+    echo -e "${C_YELLOW}${C_BOLD}WARNING: User linger is NOT enabled for user '$USER'.${C_RESET}"
     echo "Without linger, systemd user timer will not run after logout or system reboot"
     echo "until you log back in."
     echo "To enable unattended operation after reboot/logout, run:"
-    echo "  sudo loginctl enable-linger $USER"
+    echo -e "  ${C_CYAN}sudo loginctl enable-linger $USER${C_RESET}"
 fi
 
 echo ""
-echo "Installation complete!"
+echo -e "${C_GREEN}${C_BOLD}Installation complete!${C_RESET}"
 echo "To manually trigger a backup test now, run:"
-echo "  systemctl --user start ${SERVICE}"
+echo -e "  ${C_CYAN}systemctl --user start ${SERVICE}${C_RESET}"
