@@ -42,17 +42,55 @@ Backups will run automatically **every 4 hours** (02:00, 06:00, 10:00, 14:00, 18
 
 ## Common Commands
 
-| Task                                 | Command                                                              | Description                                                             |
-| :----------------------------------- | :------------------------------------------------------------------- | :---------------------------------------------------------------------- |
-| **Check backup system health**       | `./status.sh`                                                        | Read-only check for remote reachability, timer state, and latest backup |
-| **Run a manual backup now**          | `./backup.sh`                                                        | Immediate manual backup, upload & GFS retention                         |
-| **Restore the latest backup**        | `./restore.sh`                                                       | Download and restore the most recent backup from Google Drive           |
-| **Restore a specific backup**        | `./restore.sh <filename>`                                            | Restore a specific `.tar.xz` or `.zip` backup file                      |
-| **Install / update systemd timer**   | `./install-systemd.sh`                                               | Dynamically render & enable user systemd timer units                    |
-| **Uninstall systemd timer**          | `./uninstall.sh`                                                     | Stop and remove systemd timer and service units                         |
-| **Test systemd service immediately** | `systemctl --user start hermes-cloud-backup.service`                 | Trigger the systemd service manually                                    |
-| **View recent backup log**           | `tail -n 100 logs/backup.log`                                        | View log output of `backup.sh`                                          |
-| **Debug systemd timer failures**     | `journalctl --user -u hermes-cloud-backup.service -n 100 --no-pager` | View systemd service journal logs                                       |
+### Daily Backup Use
+
+| Task                                        | Command             | Description                                                                    |
+| :------------------------------------------ | :------------------ | :----------------------------------------------------------------------------- |
+| **Check backup health**                     | `./status.sh`       | Read-only health check for remote reachability, timer state, and latest backup |
+| **Run a manual backup now**                 | `./backup.sh`       | Immediate manual backup, upload & GFS retention                                |
+| **Run a complete setup & live backup test** | `./setup.sh --test` | Execute full setup and trigger a live end-to-end backup verification           |
+
+### Restore
+
+| Task                          | Command                   | Description                                                   |
+| :---------------------------- | :------------------------ | :------------------------------------------------------------ |
+| **Restore the latest backup** | `./restore.sh`            | Download and restore the most recent backup from Google Drive |
+| **Restore a specific backup** | `./restore.sh <filename>` | Restore a specific `.tar.xz` or `.zip` backup file            |
+
+### Timer Management
+
+| Task                               | Command                                                  | Description                                                  |
+| :--------------------------------- | :------------------------------------------------------- | :----------------------------------------------------------- |
+| **Install / update systemd timer** | `./setup.sh`                                             | Validate tools, check remote connection & install user timer |
+| **Re-render unit templates**       | `./install-systemd.sh`                                   | Re-render systemd units when moving repo directory           |
+| **Uninstall systemd timer**        | `./uninstall.sh`                                         | Stop timer and remove systemd unit files                     |
+| **Inspect scheduled timer runs**   | `systemctl --user list-timers hermes-cloud-backup.timer` | View timer trigger schedule and countdown                    |
+
+### Debugging
+
+| Task                                 | Command                                                              | Description                          |
+| :----------------------------------- | :------------------------------------------------------------------- | :----------------------------------- |
+| **View recent backup log**           | `tail -n 100 logs/backup.log`                                        | View local log output of `backup.sh` |
+| **View systemd service logs**        | `journalctl --user -u hermes-cloud-backup.service -n 100 --no-pager` | View systemd service journal logs    |
+| **Test systemd service immediately** | `systemctl --user start hermes-cloud-backup.service`                 | Trigger the systemd service manually |
+
+---
+
+## System Diagnostics & Health Contract
+
+The `./status.sh` diagnostic tool enforces a strict exit status contract:
+
+- **Exit Code `0` (`OVERALL STATUS: HEALTHY`)**: Returned when Hermes is found, Google Drive remote is reachable, and the systemd timer is installed, enabled, and active.
+- **Exit Code `1` (`OVERALL STATUS: ACTION REQUIRED`)**: Returned when a blocking issue exists (e.g. missing tools, Google Drive unreachable, or timer inactive).
+
+> [!NOTE]
+> User linger disabled is reported as a non-blocking warning because it only affects unattended execution after user logout or system reboot.
+
+For automated monitoring or CI scripts, use the `--check` flag for a single-line summary output:
+
+```bash
+./status.sh --check
+```
 
 ---
 
@@ -126,23 +164,37 @@ _Approximately **~22 backup archives** are maintained on Google Drive. Final del
 
 You can customize behavior using environment variables:
 
-| Variable           | Default Value                         | Description                          |
-| :----------------- | :------------------------------------ | :----------------------------------- |
-| `BACKUP_REMOTE`    | `gdrive-hermes:HermesBackups`         | Destination rclone remote and folder |
-| `HERMES_BIN`       | Resolved via `command -v hermes`      | Custom path to `hermes` executable   |
-| `BACKUP_LOCK_FILE` | `$XDG_RUNTIME_DIR/hermes-backup.lock` | Exclusive lock file path             |
-| `BACKUP_LOG_DIR`   | `<repo_dir>/logs`                     | Directory for log files              |
+| Variable           | Default Value                         | Description                           |
+| :----------------- | :------------------------------------ | :------------------------------------ |
+| `BACKUP_REMOTE`    | `gdrive-hermes:HermesBackups`         | Destination rclone remote and folder  |
+| `HERMES_BIN`       | Resolved via `command -v hermes`      | Custom path to `hermes` executable    |
+| `BACKUP_LOCK_FILE` | `$XDG_RUNTIME_DIR/hermes-backup.lock` | Exclusive lock file path              |
+| `BACKUP_LOG_DIR`   | `<repo_dir>/logs`                     | Directory for backup log files        |
+| `RESTORE_LOG_DIR`  | `<repo_dir>/logs`                     | Directory for restore log files       |
+| `MAX_LOG_LINES`    | `5000`                                | Rotate log file after this many lines |
+| `KEEP_LOG_LINES`   | `2000`                                | Lines to retain after log rotation    |
+
+---
+
+## Uninstallation Scope
+
+Running `./uninstall.sh` removes installed systemd unit files (`~/.config/systemd/user/hermes-cloud-backup.*`) and reloads the systemd daemon.
+
+> [!NOTE]
+> Running `./uninstall.sh` is completely non-destructive: it does **NOT** delete the repository directory, local log files, rclone configuration, or Google Drive backups.
 
 ---
 
 ## Troubleshooting
 
-| Symptom                             | Cause                                               | Solution                                                                                                                                 |
-| :---------------------------------- | :-------------------------------------------------- | :--------------------------------------------------------------------------------------------------------------------------------------- |
-| `hermes: command not found`         | `hermes` is not in system `PATH`                    | Set `HERMES_BIN=/path/to/hermes` or re-run `./setup.sh`                                                                                  |
-| `rclone remote not found`           | Remote `gdrive-hermes` is not configured            | Run `rclone config` and create `gdrive-hermes` remote                                                                                    |
-| `Another backup is already running` | A backup or timer-triggered job is currently active | Wait for active run to finish. Check `./status.sh` or `logs/backup.log`. Do not remove lock files unless confirmed no process is running |
-| Timer doesn't run after reboot      | User linger disabled                                | Enable linger with `sudo loginctl enable-linger $USER`                                                                                   |
+| Symptom                             | Cause                                                           | Solution                                                                                                       |
+| :---------------------------------- | :-------------------------------------------------------------- | :------------------------------------------------------------------------------------------------------------- |
+| `Cannot access rclone remote`       | OAuth token expired, network error, or revoked Drive permission | Reconnect Google Drive with `rclone config reconnect gdrive-hermes:` and test with `rclone lsf gdrive-hermes:` |
+| `setup.sh --test fails`             | Systemd service execution or backup process failed              | Inspect service logs with `journalctl --user -u hermes-cloud-backup.service -n 100 --no-pager`                 |
+| `hermes: command not found`         | `hermes` is not in system `PATH`                                | Set `HERMES_BIN=/path/to/hermes` or re-run `./setup.sh`                                                        |
+| `rclone remote not found`           | Remote `gdrive-hermes` is not configured                        | Run `rclone config` and create `gdrive-hermes` remote                                                          |
+| `Another backup is already running` | A backup or timer-triggered job is currently active             | Wait for active run to finish. Check `./status.sh` or `logs/backup.log`                                        |
+| Timer doesn't run after reboot      | User linger disabled                                            | Enable linger with `sudo loginctl enable-linger $USER`                                                         |
 
 ---
 

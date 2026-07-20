@@ -324,9 +324,9 @@ hermes_out="$("${HERMES_RESOLVED}" backup -o "${TMP_ORIG}" 2>&1)" || {
 }
 
 # Filter out confusing 'Restore with:' line emitted by hermes binary
-echo "${hermes_out}" | grep -v -i "Restore with:" | while IFS= read -r line; do
-    [ -n "${line}" ] && log_info "${line}"
-done
+echo "${hermes_out}" | grep -v -i "Restore with:" | while IFS= read -r line || [ -n "${line}" ]; do
+    log_info "${line}"
+done || true
 
 if [ ! -f "${TMP_ORIG}" ]; then
     log_error "Hermes backup output file was not created at ${TMP_ORIG}"
