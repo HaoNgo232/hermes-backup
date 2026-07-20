@@ -171,9 +171,9 @@ fi
 
 # 3. If systemd-analyze is installed, verify units
 if command -v systemd-analyze &>/dev/null; then
-    if systemd-analyze --user verify "${STAGING_UNIT_DIR}/${SERVICE}" "${STAGING_UNIT_DIR}/${TIMER}" &>/dev/null; then
+    if SYSTEMD_UNIT_PATH="${STAGING_UNIT_DIR}:${SYSTEMD_UNIT_PATH:-}" systemd-analyze --user verify "${STAGING_UNIT_DIR}/${SERVICE}" "${STAGING_UNIT_DIR}/${TIMER}" &>/dev/null; then
         :
-    elif systemd-analyze verify "${STAGING_UNIT_DIR}/${SERVICE}" "${STAGING_UNIT_DIR}/${TIMER}" &>/dev/null; then
+    elif SYSTEMD_UNIT_PATH="${STAGING_UNIT_DIR}:${SYSTEMD_UNIT_PATH:-}" systemd-analyze verify "${STAGING_UNIT_DIR}/${SERVICE}" "${STAGING_UNIT_DIR}/${TIMER}" &>/dev/null; then
         :
     else
         echo -e "${C_RED}ERROR: Rendered systemd unit failed verification.${C_RESET}" >&2
