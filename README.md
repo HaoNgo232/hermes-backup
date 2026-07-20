@@ -227,17 +227,17 @@ You don't need to edit anything in the block above — just paste it as-is.
 
 ---
 
-## How Long Are Backups Kept?
+## Retention Policy (GFS)
 
-Hermes Backup doesn't keep every backup forever — that would fill up your Google Drive. Instead, it gradually thins out older backups while keeping recent ones intact:
+Old backups are pruned automatically after each successful backup run according to a Grandfather-Father-Son (GFS) policy (implemented in `backup.sh` based on file age in days):
 
-- **Last 2 days:** Every single backup is kept (~12 files)
-- **3–7 days ago:** One backup per day is kept (~5 files)
-- **1–4 weeks ago:** One backup per week is kept (~3 files)
-- **1–3 months ago:** One backup per month is kept (~2 files)
-- **Older than 3 months:** Automatically removed
+- **0 to 2 days old (`age <= 2 days`)**: Keep **ALL** backups (up to ~12 archives for 4-hour schedule).
+- **3 to 7 days old (`3 <= age <= 7 days`)**: Keep **1 backup per day** (the latest backup of each day, ~5 archives).
+- **8 to 28 days old (`8 <= age <= 28 days`)**: Keep **1 backup per week** (the latest backup of each ISO week, ~3 archives).
+- **29 to 90 days old (`29 <= age <= 90 days`)**: Keep **1 backup per month** (the latest backup of each month, ~2 archives).
+- **Older than 90 days (`age > 90 days`)**: Automatically deleted from remote storage.
 
-**In total, about 22 backup files are stored on your Google Drive at any time.** This gives you fine-grained recovery for recent data and longer-term safety nets going back 3 months.
+At any given time, approximately **~22 backup archives** are maintained on your remote destination.
 
 ---
 
