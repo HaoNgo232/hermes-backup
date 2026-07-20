@@ -219,7 +219,11 @@ if [ "${USE_SUPER_COMPRESSION}" = "true" ]; then
     log_step "[2/4] Decompressing and super-compressing to .tar.xz (-9e)..."
     mkdir -p "${TMP_EXTRACT}"
     unzip -q "${TMP_ZIP}" -d "${TMP_EXTRACT}"
-    (cd "${TMP_EXTRACT}" && tar -cf - . | xz -9e -c > "${TMP_XZ}")
+    if is_interactive_tty; then
+        (cd "${TMP_EXTRACT}" && tar -cf - . | xz -v -9e -c > "${TMP_XZ}")
+    else
+        (cd "${TMP_EXTRACT}" && tar -cf - . | xz -9e -c > "${TMP_XZ}")
+    fi
 
     if [ ! -f "${TMP_XZ}" ]; then
         log_error "Compression failed: ${TMP_XZ} was not created."
