@@ -154,6 +154,9 @@ if encryption_is_enabled; then
 else
     ENABLE_ENC="n"
     if is_interactive_tty; then
+        echo -e "  ${C_CYAN}Client-side encryption encrypts files before uploading to Google Drive.${C_RESET}"
+        echo -e "    ${C_GREEN}y${C_RESET} = Encrypt data (Maximum privacy; requires saving recovery password & salt)"
+        echo -e "    ${C_GREEN}N${C_RESET} = No encryption (Standard backup mode; simpler recovery) [Default]"
         read -p "Enable client-side encryption for cloud backups? [y/N]: " -r ENABLE_ENC_INPUT || ENABLE_ENC_INPUT="n"
         ENABLE_ENC="$(echo "${ENABLE_ENC_INPUT}" | tr '[:upper:]' '[:lower:]')"
     fi
@@ -220,6 +223,10 @@ fi
 # Configure Super Compression Option
 ENABLE_SUPER="n"
 if is_interactive_tty; then
+    echo ""
+    echo -e "  ${C_CYAN}Super compression (.tar.xz) shrinks file size but uses extra CPU/time.${C_RESET}"
+    echo -e "    ${C_GREEN}y${C_RESET} = Super compression (.tar.xz format - smaller cloud archive, slower)"
+    echo -e "    ${C_GREEN}N${C_RESET} = Fast compression (.zip format - fast backup & restore) [Default]"
     read -p "Enable super compression (.tar.xz)? [y/N]: " -r ENABLE_SUPER_INPUT || ENABLE_SUPER_INPUT="n"
     ENABLE_SUPER="$(echo "${ENABLE_SUPER_INPUT}" | tr '[:upper:]' '[:lower:]')"
 elif [[ -v ENABLE_SUPER_COMPRESSION ]]; then
