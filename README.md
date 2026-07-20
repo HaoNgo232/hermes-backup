@@ -1,6 +1,6 @@
 # Hermes Backup to Google Drive
 
-Automated workflow script to back up, super-compress, and restore your [Hermes Agent](https://github.com/HaoNgo232/hermes-agent) data to Google Drive with Systemd timer scheduling and Grandfather-Father-Son (GFS) retention.
+Automated workflow script to back up, super-compress, and restore your [Hermes Agent](https://github.com/NousResearch/hermes-agent) data to Google Drive with Systemd timer scheduling and Grandfather-Father-Son (GFS) retention.
 
 ---
 
