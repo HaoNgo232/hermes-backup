@@ -1,6 +1,6 @@
 # Hermes Backup to Google Drive (Simple)
 
-Automatically back up Hermes Agent data to Google Drive every four hours.
+Automated workflow setup to back up and restore your Hermes Agent data to Google Drive.
 
 ---
 
@@ -78,3 +78,10 @@ cd ~/hermes-backup
 tail -f logs/backup.log
 tail -f logs/restore.log
 ```
+
+---
+
+## License
+
+[MIT](LICENSE)
+
