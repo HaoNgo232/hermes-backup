@@ -6,15 +6,8 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
-# Run as the user only (systemd --user already runs as the user).
 WorkingDirectory=%h/hermes-backup
-# Load config (no secrets inside). rclone reads its own 600-mode config.
 Environment=HERMES_HOME=%h/.hermes
-EnvironmentFile=-%h/hermes-backup/config/backup.env
-# Daily backup
 ExecStart=%h/hermes-backup/backup.sh
-# Optional: also prune old backups on the same schedule.
-# Remove the leading '#' to enable. Pruning is dry-run unless --confirm is added.
-# ExecStartPost=%h/hermes-backup/bin/hermes-backup-cloud --no-dry-run --prune --confirm
 Nice=10
 IOSchedulingClass=idle

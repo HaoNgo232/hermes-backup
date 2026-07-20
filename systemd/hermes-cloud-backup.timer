@@ -1,10 +1,11 @@
 [Unit]
-Description=Hourly Hermes cloud backup timer
+Description=Hermes cloud backup timer (mỗi 4 tiếng)
 Documentation=%h/hermes-backup/README.md
 
 [Timer]
-# Run hourly (mỗi 1 tiếng 1 lần)
-OnCalendar=hourly
+# Backup mỗi 4 tiếng: 2h, 6h, 10h, 14h, 18h, 22h
+OnCalendar=*-*-* 02,06,10,14,18,22:00:00
+# Nếu máy tắt lúc đến lịch, chạy bù ngay khi bật lại
 Persistent=true
 RandomizedDelaySec=5min
 Unit=hermes-cloud-backup.service

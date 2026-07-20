@@ -1,6 +1,6 @@
 # Hermes Backup sang Google Drive (Đơn giản)
 
-Tự động backup dữ liệu Hermes Agent lên Google Drive định kỳ hàng giờ.
+Tự động backup dữ liệu Hermes Agent lên Google Drive mỗi 4 tiếng.
 
 ---
 
@@ -27,42 +27,33 @@ Chạy lệnh `rclone config` và chọn các phím bấm theo thứ tự sau:
 
 ---
 
-## 1. Backup thủ công
-
-Chạy 1 lệnh duy nhất để sao lưu ngay lập tức:
+## 1. Backup (chỉ cần 1 lệnh duy nhất)
 
 ```bash
 ./backup.sh
 ```
 
-*(Script sẽ tự tạo bản backup bằng `hermes backup`, đẩy lên Google Drive và tự động giữ lại **24 bản mới nhất**)*
+**Lần đầu chạy**: Script sẽ tự động cài Systemd Timer để backup **mỗi 4 tiếng** (2h, 6h, 10h, 14h, 18h, 22h). Từ đó không cần làm gì nữa.
+
+**Chiến lược lưu trữ GFS** (tự động dọn dẹp bản cũ):
+| Tầng | Giữ bao nhiêu | Mục đích |
+|------|---------------|----------|
+| Gần đây | Tất cả trong 2 ngày | Phục hồi nhanh |
+| Hàng ngày | 1 bản/ngày × 7 ngày | Lỗi phát hiện trong tuần |
+| Hàng tuần | 1 bản/tuần × 4 tuần | Lỗi phát hiện chậm |
+| Hàng tháng | 1 bản/tháng × 3 tháng | Bảo hiểm dài hạn |
 
 ---
 
-## 2. Bật Backup định kỳ (Systemd Timer)
+## 2. Khôi phục dữ liệu (Restore)
 
-Bật tính năng tự động chạy backup **mỗi 1 tiếng 1 lần (hourly)**:
-
-```bash
-bin/install-systemd.sh
-```
-
-Kiểm tra trạng thái timer:
-```bash
-systemctl --user list-timers hermes-cloud-backup.timer
-```
-
----
-
-## 3. Khôi phục dữ liệu (Restore)
-
-Chạy 1 lệnh duy nhất để tự động tải bản backup mới nhất từ Google Drive và import:
+Chạy 1 lệnh duy nhất để tự động tải bản backup mới nhất và import:
 
 ```bash
 ./restore.sh
 ```
 
-*(Hoặc khôi phục một file chỉ định: `./restore.sh <tên-file-backup.zip>`)*
+*(Hoặc khôi phục một bản cụ thể: `./restore.sh <tên-file-backup.zip>`)*
 
 ---
 
@@ -71,4 +62,10 @@ Chạy 1 lệnh duy nhất để tự động tải bản backup mới nhất t�
 ```bash
 tail -f logs/backup.log
 tail -f logs/restore.log
+```
+
+## Kiểm tra trạng thái timer
+
+```bash
+systemctl --user list-timers hermes-cloud-backup.timer
 ```

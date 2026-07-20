@@ -14,13 +14,7 @@ log() {
     echo "$(date '+%Y-%m-%d %H:%M:%S') - $*" | tee -a "${LOG_FILE}"
 }
 
-# Đọc cấu hình nếu có
-REMOTE="gdrive-hermes:HermesBackups"
-if [ -f "${SCRIPT_DIR}/config/backup.env" ]; then
-    # shellcheck source=/dev/null
-    source "${SCRIPT_DIR}/config/backup.env"
-    REMOTE="${BACKUP_REMOTE:-${CRYPT_REMOTE:-${PLAINTEXT_REMOTE:-gdrive-hermes:HermesBackups}}}"
-fi
+REMOTE="${BACKUP_REMOTE:-gdrive-hermes:HermesBackups}"
 
 # Chắc chắn REMOTE kết thúc bằng / nếu có folder
 case "${REMOTE}" in
