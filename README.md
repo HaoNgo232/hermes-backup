@@ -57,6 +57,12 @@ Backups will run automatically **every 4 hours** (02:00, 06:00, 10:00, 14:00, 18
 | **Restore the latest backup** | `./restore.sh`            | Download and restore the most recent backup from Google Drive |
 | **Restore a specific backup** | `./restore.sh <filename>` | Restore a specific `.tar.xz` or `.zip` backup file            |
 
+### Super Compression Option
+
+During `./setup.sh`, you can enable or disable Super Compression (`.tar.xz` format using `xz -9e`).
+- **Enabled (`y`)**: Maximum compression ratio (`.tar.xz`).
+- **Disabled (`n` - Default)**: Faster backup and restore speeds (`.zip`).
+
 ### Timer Management
 
 | Task                               | Command                                                  | Description                                                  |

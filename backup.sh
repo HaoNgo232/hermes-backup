@@ -41,10 +41,13 @@ preflight_backup() {
     require_command rclone
     require_command unzip
     require_command tar
-    require_command xz
     require_command date
     require_command du
     require_command flock
+
+    if [ "$(state_get "ENABLE_SUPER_COMPRESSION" "false")" = "true" ]; then
+        require_command xz
+    fi
 
     # Resolve Hermes binary
     hermes_apply_persisted_environment
@@ -186,46 +189,72 @@ preflight_backup
 
 encryption_show_first_backup_reminder_if_needed
 
+USE_SUPER_COMPRESSION="$(state_get "ENABLE_SUPER_COMPRESSION" "false")"
+
 TIMESTAMP="$(date +%d-%m-%Y_%Hh%Mp%Ss)"
-ARCHIVE_NAME="hermes-backup-${TIMESTAMP}.tar.xz"
-
 WORKSPACE="$(mktemp -d "${TMPDIR:-/tmp}/hermes-backup-XXXXXX")"
-TMP_ZIP="${WORKSPACE}/hermes-raw-backup.zip"
-TMP_EXTRACT="${WORKSPACE}/extract"
-TMP_XZ="${WORKSPACE}/${ARCHIVE_NAME}"
 
-log_step "[1/4] Generating raw Hermes export..."
-local_backup_out=""
-if ! local_backup_out="$("${HERMES_RESOLVED}" backup -o "${TMP_ZIP}" 2>&1)"; then
-    log_error "Hermes backup command failed:"
-    log_error "${local_backup_out}"
-    exit 1
+if [ "${USE_SUPER_COMPRESSION}" = "true" ]; then
+    ARCHIVE_NAME="hermes-backup-${TIMESTAMP}.tar.xz"
+    TMP_ZIP="${WORKSPACE}/hermes-raw-backup.zip"
+    TMP_EXTRACT="${WORKSPACE}/extract"
+    TMP_XZ="${WORKSPACE}/${ARCHIVE_NAME}"
+
+    log_step "[1/4] Generating raw Hermes export..."
+    local_backup_out=""
+    if ! local_backup_out="$("${HERMES_RESOLVED}" backup -o "${TMP_ZIP}" 2>&1)"; then
+        log_error "Hermes backup command failed:"
+        log_error "${local_backup_out}"
+        exit 1
+    fi
+
+    if [ ! -f "${TMP_ZIP}" ]; then
+        log_error "Hermes backup failed: file ${TMP_ZIP} was not created."
+        exit 1
+    fi
+
+    raw_zip_bytes=$(stat -c%s "${TMP_ZIP}" 2>/dev/null || du -b "${TMP_ZIP}" | cut -f1)
+    log_success "Raw ZIP archive created successfully (${raw_zip_bytes} bytes)."
+
+    log_step "[2/4] Decompressing and super-compressing to .tar.xz (-9e)..."
+    mkdir -p "${TMP_EXTRACT}"
+    unzip -q "${TMP_ZIP}" -d "${TMP_EXTRACT}"
+    (cd "${TMP_EXTRACT}" && tar -cf - . | xz -9e -c > "${TMP_XZ}")
+
+    if [ ! -f "${TMP_XZ}" ]; then
+        log_error "Compression failed: ${TMP_XZ} was not created."
+        exit 1
+    fi
+
+    xz_bytes=$(stat -c%s "${TMP_XZ}" 2>/dev/null || du -b "${TMP_XZ}" | cut -f1)
+    log_success "Super-compressed .tar.xz archive created successfully (${xz_bytes} bytes)."
+    UPLOAD_FILE="${TMP_XZ}"
+else
+    ARCHIVE_NAME="hermes-backup-${TIMESTAMP}.zip"
+    TMP_ZIP="${WORKSPACE}/${ARCHIVE_NAME}"
+
+    log_step "[1/4] Generating Hermes backup archive (.zip)..."
+    local_backup_out=""
+    if ! local_backup_out="$("${HERMES_RESOLVED}" backup -o "${TMP_ZIP}" 2>&1)"; then
+        log_error "Hermes backup command failed:"
+        log_error "${local_backup_out}"
+        exit 1
+    fi
+
+    if [ ! -f "${TMP_ZIP}" ]; then
+        log_error "Hermes backup failed: file ${TMP_ZIP} was not created."
+        exit 1
+    fi
+
+    zip_bytes=$(stat -c%s "${TMP_ZIP}" 2>/dev/null || du -b "${TMP_ZIP}" | cut -f1)
+    log_success "ZIP archive created successfully (${zip_bytes} bytes)."
+    log_step "[2/4] Skipping super-compression (disabled in config)..."
+    UPLOAD_FILE="${TMP_ZIP}"
 fi
-
-if [ ! -f "${TMP_ZIP}" ]; then
-    log_error "Hermes backup failed: file ${TMP_ZIP} was not created."
-    exit 1
-fi
-
-raw_zip_bytes=$(stat -c%s "${TMP_ZIP}" 2>/dev/null || du -b "${TMP_ZIP}" | cut -f1)
-log_success "Raw ZIP archive created successfully (${raw_zip_bytes} bytes)."
-
-log_step "[2/4] Decompressing and super-compressing to .tar.xz (-9e)..."
-mkdir -p "${TMP_EXTRACT}"
-unzip -q "${TMP_ZIP}" -d "${TMP_EXTRACT}"
-(cd "${TMP_EXTRACT}" && tar -cf - . | xz -9e -c > "${TMP_XZ}")
-
-if [ ! -f "${TMP_XZ}" ]; then
-    log_error "Compression failed: ${TMP_XZ} was not created."
-    exit 1
-fi
-
-xz_bytes=$(stat -c%s "${TMP_XZ}" 2>/dev/null || du -b "${TMP_XZ}" | cut -f1)
-log_success "Super-compressed .tar.xz archive created successfully (${xz_bytes} bytes)."
 
 log_step "[3/4] Uploading archive to destination (${DESTINATION})..."
 TARGET_REMOTE_FILE="${DESTINATION}${ARCHIVE_NAME}"
-rclone_copy_file "${TMP_XZ}" "${TARGET_REMOTE_FILE}"
+rclone_copy_file "${UPLOAD_FILE}" "${TARGET_REMOTE_FILE}"
 
 log_step "Verifying remote upload integrity..."
 if ! rclone_verify_object "${TARGET_REMOTE_FILE}"; then

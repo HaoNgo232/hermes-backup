@@ -55,6 +55,16 @@ test_invalid_boolean() {
 }
 assert_fails "Invalid ENCRYPTION_ENABLED string rejected" test_invalid_boolean
 
+test_invalid_super_comp_boolean() {
+    local tdir="${TEST_TMP_DIR}/inv_super_bool"
+    env XDG_CONFIG_HOME="${tdir}" REPO_DIR="${REPO_DIR}" bash -Eeuo pipefail -c '
+        source "${REPO_DIR}/lib/common.sh"
+        source "${REPO_DIR}/lib/state.sh"
+        state_set "ENABLE_SUPER_COMPRESSION" "invalid_super_bool"
+    '
+}
+assert_fails "Invalid ENABLE_SUPER_COMPRESSION string rejected" test_invalid_super_comp_boolean
+
 # Test 4: Validation - Invalid mode
 test_invalid_mode() {
     local tdir="${TEST_TMP_DIR}/inv_mode"

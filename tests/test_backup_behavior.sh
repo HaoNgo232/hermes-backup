@@ -406,4 +406,81 @@ EOF
 }
 assert_succeeds "Scenario F: Listing failure during retention causes backup failure" test_listing_failure_retention_scenario
 
+# Scenario G: Super compression enabled produces .tar.xz
+test_super_compression_enabled_scenario() {
+    local tdir="${TEST_TMP_DIR}/scen_g"
+    mkdir -p "${tdir}/cfg/hermes-backup" "${tdir}/home" "${tdir}/logs"
+    local call_log="${tdir}/call.log"
+    touch "${call_log}"
+
+    cat <<EOF > "${tdir}/cfg/hermes-backup/state.env"
+STATE_SCHEMA_VERSION=1
+ENCRYPTION_ENABLED=false
+ENCRYPTION_MODE=none
+BASE_REMOTE=gdrive-hermes:
+BASE_PATH=HermesBackups
+ENABLE_SUPER_COMPRESSION=true
+CRYPT_REMOTE=
+CRYPT_PATH=
+RECOVERY_NOTICE_STATE=shown
+EOF
+    chmod 0600 "${tdir}/cfg/hermes-backup/state.env"
+
+    env \
+        HOME="${tdir}/home" \
+        XDG_CONFIG_HOME="${tdir}/cfg" \
+        PATH="${MOCK_BIN}:${PATH}" \
+        HERMES_BIN="${MOCK_BIN}/hermes" \
+        BACKUP_LOG_DIR="${tdir}/logs" \
+        BACKUP_LOCK_FILE="${tdir}/backup.lock" \
+        MOCK_CALL_LOG="${call_log}" \
+        MOCK_HAS_CRYPT="false" \
+        REPO_DIR="${REPO_DIR}" \
+        bash "${REPO_DIR}/backup.sh"
+
+    grep -q "xz -9e" "${call_log}"
+    grep -q "rclone copyto .* -> gdrive-hermes:HermesBackups/hermes-backup-.*\.tar\.xz" "${call_log}"
+}
+assert_succeeds "Scenario G: Super compression enabled produces .tar.xz" test_super_compression_enabled_scenario
+
+# Scenario H: Super compression disabled produces .zip directly without calling xz
+test_super_compression_disabled_scenario() {
+    local tdir="${TEST_TMP_DIR}/scen_h"
+    mkdir -p "${tdir}/cfg/hermes-backup" "${tdir}/home" "${tdir}/logs"
+    local call_log="${tdir}/call.log"
+    touch "${call_log}"
+
+    cat <<EOF > "${tdir}/cfg/hermes-backup/state.env"
+STATE_SCHEMA_VERSION=1
+ENCRYPTION_ENABLED=false
+ENCRYPTION_MODE=none
+BASE_REMOTE=gdrive-hermes:
+BASE_PATH=HermesBackups
+ENABLE_SUPER_COMPRESSION=false
+CRYPT_REMOTE=
+CRYPT_PATH=
+RECOVERY_NOTICE_STATE=shown
+EOF
+    chmod 0600 "${tdir}/cfg/hermes-backup/state.env"
+
+    env \
+        HOME="${tdir}/home" \
+        XDG_CONFIG_HOME="${tdir}/cfg" \
+        PATH="${MOCK_BIN}:${PATH}" \
+        HERMES_BIN="${MOCK_BIN}/hermes" \
+        BACKUP_LOG_DIR="${tdir}/logs" \
+        BACKUP_LOCK_FILE="${tdir}/backup.lock" \
+        MOCK_CALL_LOG="${call_log}" \
+        MOCK_HAS_CRYPT="false" \
+        REPO_DIR="${REPO_DIR}" \
+        bash "${REPO_DIR}/backup.sh"
+
+    if grep -q "xz" "${call_log}"; then
+        echo "xz was called unexpectedly when super compression disabled" >&2
+        exit 1
+    fi
+    grep -q "rclone copyto .* -> gdrive-hermes:HermesBackups/hermes-backup-.*\.zip" "${call_log}"
+}
+assert_succeeds "Scenario H: Super compression disabled produces .zip directly" test_super_compression_disabled_scenario
+
 echo -e "\033[0;32mALL BACKUP INTEGRATION TESTS PASSED!\033[0m"

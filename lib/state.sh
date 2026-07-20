@@ -42,6 +42,7 @@ state_key_is_allowed() {
         CRYPT_PATH|\
         RECOVERY_NOTICE_STATE|\
         ENCRYPTION_SETUP_COMPLETED_AT|\
+        ENABLE_SUPER_COMPRESSION|\
         HERMES_HOME|\
         HERMES_BIN)
             return 0
@@ -105,6 +106,7 @@ state_init_defaults() {
     APP_STATE["CRYPT_PATH"]=""
     APP_STATE["RECOVERY_NOTICE_STATE"]="shown"
     APP_STATE["ENCRYPTION_SETUP_COMPLETED_AT"]=""
+    APP_STATE["ENABLE_SUPER_COMPRESSION"]="${ENABLE_SUPER_COMPRESSION:-false}"
     APP_STATE["HERMES_HOME"]=""
     APP_STATE["HERMES_BIN"]=""
 }
@@ -193,6 +195,12 @@ state_validate() {
 
     if ! is_boolean "${enc_enabled}"; then
         log_error "Invalid state file: ENCRYPTION_ENABLED must be 'true' or 'false' (got '${enc_enabled}')."
+        return 1
+    fi
+
+    local super_comp="${APP_STATE["ENABLE_SUPER_COMPRESSION"]:-false}"
+    if ! is_boolean "${super_comp}"; then
+        log_error "Invalid state file: ENABLE_SUPER_COMPRESSION must be 'true' or 'false' (got '${super_comp}')."
         return 1
     fi
 

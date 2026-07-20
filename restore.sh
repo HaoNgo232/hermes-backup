@@ -31,7 +31,6 @@ log_step "[1/3] Preflight checks & backup resolution..."
 require_command rclone
 require_command zip
 require_command tar
-require_command xz
 require_command date
 
 hermes_apply_persisted_environment
@@ -128,6 +127,7 @@ validate_tar_member_paths() {
 }
 
 if [[ "${TARGET_FILE}" == *.tar.xz ]]; then
+    require_command xz
     log_info "Decompressing .tar.xz archive..."
     if ! validate_tar_member_paths "${TMP_FILE}"; then
         log_error "Archive path validation failed for '${TARGET_FILE}'."

@@ -214,10 +214,17 @@ rclone_copy_file() {
     rclone_require
 
     local out
-    if ! out="$(rclone copyto "${src_file}" "${dest_remote_path}" 2>&1)"; then
-        log_error "rclone copyto failed from '${src_file}' to '${dest_remote_path}'."
-        log_error "rclone output: $(rclone_sanitize_output "${out}")"
-        return 1
+    if is_interactive_tty; then
+        if ! rclone copyto --stats 5s -P "${src_file}" "${dest_remote_path}"; then
+            log_error "rclone copyto failed from '${src_file}' to '${dest_remote_path}'."
+            return 1
+        fi
+    else
+        if ! out="$(rclone copyto "${src_file}" "${dest_remote_path}" 2>&1)"; then
+            log_error "rclone copyto failed from '${src_file}' to '${dest_remote_path}'."
+            log_error "rclone output: $(rclone_sanitize_output "${out}")"
+            return 1
+        fi
     fi
     return 0
 }
@@ -228,10 +235,17 @@ rclone_fetch_file() {
     rclone_require
 
     local out
-    if ! out="$(rclone copyto "${src_remote_path}" "${dest_local_file}" 2>&1)"; then
-        log_error "rclone copyto download failed for '${src_remote_path}'."
-        log_error "rclone output: $(rclone_sanitize_output "${out}")"
-        return 1
+    if is_interactive_tty; then
+        if ! rclone copyto --stats 5s -P "${src_remote_path}" "${dest_local_file}"; then
+            log_error "rclone copyto download failed for '${src_remote_path}'."
+            return 1
+        fi
+    else
+        if ! out="$(rclone copyto "${src_remote_path}" "${dest_local_file}" 2>&1)"; then
+            log_error "rclone copyto download failed for '${src_remote_path}'."
+            log_error "rclone output: $(rclone_sanitize_output "${out}")"
+            return 1
+        fi
     fi
     return 0
 }

@@ -91,7 +91,6 @@ check_cmd systemctl || MISSING=1
 check_cmd unzip || MISSING=1
 check_cmd zip || MISSING=1
 check_cmd tar || MISSING=1
-check_cmd xz || MISSING=1
 check_cmd flock || MISSING=1
 
 hermes_apply_persisted_environment
@@ -216,6 +215,27 @@ else
             "CRYPT_PATH" "" \
             "RECOVERY_NOTICE_STATE" "shown"
     fi
+fi
+
+# Configure Super Compression Option
+ENABLE_SUPER="n"
+if is_interactive_tty; then
+    read -p "Enable super compression (.tar.xz)? [y/N]: " -r ENABLE_SUPER_INPUT || ENABLE_SUPER_INPUT="n"
+    ENABLE_SUPER="$(echo "${ENABLE_SUPER_INPUT}" | tr '[:upper:]' '[:lower:]')"
+elif [[ -v ENABLE_SUPER_COMPRESSION ]]; then
+    ENABLE_SUPER="$(echo "${ENABLE_SUPER_COMPRESSION}" | tr '[:upper:]' '[:lower:]')"
+fi
+
+if [[ "${ENABLE_SUPER}" == "y" || "${ENABLE_SUPER}" == "yes" || "${ENABLE_SUPER}" == "true" ]]; then
+    if ! check_cmd xz; then
+        echo -e "${BADGE_ERR} ${C_RED}Super compression requires 'xz'. Please install xz-utils and try again.${C_RESET}" >&2
+        exit 1
+    fi
+    state_set "ENABLE_SUPER_COMPRESSION" "true"
+    echo -e "  ${BADGE_OK} Super compression: ENABLED (.tar.xz format)"
+else
+    state_set "ENABLE_SUPER_COMPRESSION" "false"
+    echo -e "  ${BADGE_OK} Super compression: DISABLED (Fast .zip format)"
 fi
 
 # ---------------------------------------------------------------------
