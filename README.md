@@ -41,16 +41,20 @@ cd ~/hermes-backup
 ./backup.sh
 ```
 
-**First run**: The script automatically installs a Systemd Timer to run backups **every four hours** (02:00, 06:00, 10:00, 14:00, 18:00, and 22:00). No further action is needed.
+**Schedule**: Backups run automatically **every 4 hours** (02:00, 06:00, 10:00, 14:00, 18:00, 22:00) producing 6 backups per day. On first run, `./backup.sh` automatically installs the Systemd Timer.
 
-**GFS retention strategy** (automatically removes old backups):
+**Automatic Retention & Cleanup Rules**:
+After every backup, old files on Google Drive are automatically cleaned up based on file age:
 
-| Tier    | Retention                     | Purpose                           |
-| ------- | ----------------------------- | --------------------------------- |
-| Recent  | Every backup for 2 days       | Fast recovery                     |
-| Daily   | 1 backup per day × 7 days     | Issues discovered during the week |
-| Weekly  | 1 backup per week × 4 weeks   | Issues discovered later           |
-| Monthly | 1 backup per month × 3 months | Long-term protection              |
+| File Age | Cleanup Rule | Stored Files Count |
+| -------- | ------------ | ------------------ |
+| **0 to 2 days old** (last 48 hours) | Keep **ALL** backups | ~12 zip files |
+| **3 to 7 days old** (days 3–7) | Keep **1 backup per day** (removes other 5 daily backups) | ~5 zip files |
+| **8 to 28 days old** (weeks 2–4) | Keep **1 backup per week** (removes other backups of the week) | ~3 zip files |
+| **29 to 90 days old** (months 2–3) | Keep **1 backup per month** (removes other backups of the month) | ~2 zip files |
+| **Older than 90 days** (> 3 months) | **Permanently deleted** | 0 zip files |
+
+👉 **Total stored files on Google Drive**: Always maintained at **~22 zip files** (~1.1 GB total storage).
 
 ---
 
