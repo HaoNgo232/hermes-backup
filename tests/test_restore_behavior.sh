@@ -111,7 +111,24 @@ case "${cmd}" in
         fi
         dest="$2"
         mkdir -p "$(dirname "${dest}")"
-        echo "mock-backup-zip-binary-data" > "${dest}"
+        if [[ "${dest}" == *.sha256 ]]; then
+            if [ "${MOCK_MANIFEST_MISSING:-false}" = "true" ]; then
+                echo "Error 404: Manifest not found" >&2
+                exit 1
+            elif [ "${MOCK_MANIFEST_MALFORMED:-false}" = "true" ]; then
+                echo "INVALID_NOT_A_HASH" > "${dest}"
+            elif [ "${MOCK_MANIFEST_MISMATCH:-false}" = "true" ]; then
+                archive_base="$(basename "${dest%.sha256}")"
+                echo "0000000000000000000000000000000000000000000000000000000000000000  ${archive_base}" > "${dest}"
+            else
+                archive_base="$(basename "${dest%.sha256}")"
+                payload="mock-backup-zip-binary-data"
+                hash="$(echo -n "${payload}" | sha256sum | awk '{print $1}')"
+                echo "${hash}  ${archive_base}" > "${dest}"
+            fi
+        else
+            echo -n "mock-backup-zip-binary-data" > "${dest}"
+        fi
         ;;
     config)
         sub="${1:-}"
@@ -156,6 +173,7 @@ RECOVERY_NOTICE_STATE=shown
 EOF
     chmod 0600 "${tdir}/cfg/hermes-backup/state.env"
 
+    local rc=0
     env \
         HOME="${tdir}/home" \
         XDG_CONFIG_HOME="${tdir}/cfg" \
@@ -165,9 +183,11 @@ EOF
         MOCK_CALL_LOG="${call_log}" \
         MOCK_HAS_CRYPT="false" \
         REPO_DIR="${REPO_DIR}" \
-        bash "${REPO_DIR}/restore.sh" "hermes-backup-20-07-2026_14h00p00s.zip"
+        bash "${REPO_DIR}/restore.sh" "hermes-backup-20-07-2026_14h00p00s.zip" || rc=$?
 
+    [ "${rc}" -eq 0 ]
     grep -q "rclone copyto gdrive-hermes:HermesBackups/hermes-backup-20-07-2026_14h00p00s.zip ->" "${call_log}"
+    grep -q "hermes import --force" "${call_log}"
 }
 assert_succeeds "Scenario A: Plaintext restore uses base destination" test_plaintext_restore
 
@@ -190,6 +210,7 @@ RECOVERY_NOTICE_STATE=shown
 EOF
     chmod 0600 "${tdir}/cfg/hermes-backup/state.env"
 
+    local rc=0
     env \
         HOME="${tdir}/home" \
         XDG_CONFIG_HOME="${tdir}/cfg" \
@@ -199,9 +220,11 @@ EOF
         MOCK_CALL_LOG="${call_log}" \
         MOCK_HAS_CRYPT="true" \
         REPO_DIR="${REPO_DIR}" \
-        bash "${REPO_DIR}/restore.sh" "hermes-backup-20-07-2026_14h00p00s.zip"
+        bash "${REPO_DIR}/restore.sh" "hermes-backup-20-07-2026_14h00p00s.zip" || rc=$?
 
+    [ "${rc}" -eq 0 ]
     grep -q "rclone copyto hermes-backup-crypt:hermes-backup-20-07-2026_14h00p00s.zip ->" "${call_log}"
+    grep -q "hermes import --force" "${call_log}"
 }
 assert_succeeds "Scenario B: Encrypted restore uses crypt source" test_encrypted_restore
 
@@ -294,6 +317,7 @@ EOF
     local initial_hash
     initial_hash="$(sha256sum "${tdir}/cfg/hermes-backup/state.env" | cut -d' ' -f1)"
 
+    local rc=0
     env \
         HOME="${tdir}/home" \
         XDG_CONFIG_HOME="${tdir}/cfg" \
@@ -302,8 +326,9 @@ EOF
         RESTORE_LOG_DIR="${tdir}/logs" \
         MOCK_CALL_LOG="${call_log}" \
         REPO_DIR="${REPO_DIR}" \
-        bash "${REPO_DIR}/restore.sh" "hermes-backup-20-07-2026_14h00p00s.zip"
+        bash "${REPO_DIR}/restore.sh" "hermes-backup-20-07-2026_14h00p00s.zip" || rc=$?
 
+    [ "${rc}" -eq 0 ]
     grep -q "hermes import --force" "${call_log}"
     final_hash="$(sha256sum "${tdir}/cfg/hermes-backup/state.env" | cut -d' ' -f1)"
     [ "${initial_hash}" = "${final_hash}" ]
@@ -347,5 +372,118 @@ EOF
     fi
 }
 assert_succeeds "Scenario F: Unsafe tar archive member path rejected" test_tar_path_traversal_scenario
+
+# Scenario G: Checksum mismatch fails restore without calling hermes import
+test_manifest_checksum_mismatch_scenario() {
+    local tdir="${TEST_TMP_DIR}/rest_g"
+    mkdir -p "${tdir}/cfg/hermes-backup" "${tdir}/home" "${tdir}/logs"
+    local call_log="${tdir}/call.log"
+    touch "${call_log}"
+
+    cat <<EOF > "${tdir}/cfg/hermes-backup/state.env"
+STATE_SCHEMA_VERSION=1
+ENCRYPTION_ENABLED=false
+ENCRYPTION_MODE=none
+BASE_REMOTE=gdrive-hermes:
+BASE_PATH=HermesBackups
+CRYPT_REMOTE=
+CRYPT_PATH=
+RECOVERY_NOTICE_STATE=shown
+EOF
+    chmod 0600 "${tdir}/cfg/hermes-backup/state.env"
+
+    local rc=0
+    env \
+        HOME="${tdir}/home" \
+        XDG_CONFIG_HOME="${tdir}/cfg" \
+        PATH="${MOCK_BIN}:${PATH}" \
+        HERMES_BIN="${MOCK_BIN}/hermes" \
+        RESTORE_LOG_DIR="${tdir}/logs" \
+        MOCK_CALL_LOG="${call_log}" \
+        MOCK_MANIFEST_MISMATCH="true" \
+        REPO_DIR="${REPO_DIR}" \
+        bash "${REPO_DIR}/restore.sh" "hermes-backup-20-07-2026_14h00p00s.zip" &>/dev/null || rc=$?
+
+    [ "${rc}" -ne 0 ]
+    if grep -q "hermes import" "${call_log}"; then
+        exit 1
+    fi
+}
+assert_succeeds "Scenario G: Checksum mismatch fails restore without calling hermes import" test_manifest_checksum_mismatch_scenario
+
+# Scenario H: Malformed manifest fails restore without calling hermes import
+test_manifest_malformed_scenario() {
+    local tdir="${TEST_TMP_DIR}/rest_h"
+    mkdir -p "${tdir}/cfg/hermes-backup" "${tdir}/home" "${tdir}/logs"
+    local call_log="${tdir}/call.log"
+    touch "${call_log}"
+
+    cat <<EOF > "${tdir}/cfg/hermes-backup/state.env"
+STATE_SCHEMA_VERSION=1
+ENCRYPTION_ENABLED=false
+ENCRYPTION_MODE=none
+BASE_REMOTE=gdrive-hermes:
+BASE_PATH=HermesBackups
+CRYPT_REMOTE=
+CRYPT_PATH=
+RECOVERY_NOTICE_STATE=shown
+EOF
+    chmod 0600 "${tdir}/cfg/hermes-backup/state.env"
+
+    local rc=0
+    env \
+        HOME="${tdir}/home" \
+        XDG_CONFIG_HOME="${tdir}/cfg" \
+        PATH="${MOCK_BIN}:${PATH}" \
+        HERMES_BIN="${MOCK_BIN}/hermes" \
+        RESTORE_LOG_DIR="${tdir}/logs" \
+        MOCK_CALL_LOG="${call_log}" \
+        MOCK_MANIFEST_MALFORMED="true" \
+        REPO_DIR="${REPO_DIR}" \
+        bash "${REPO_DIR}/restore.sh" "hermes-backup-20-07-2026_14h00p00s.zip" &>/dev/null || rc=$?
+
+    [ "${rc}" -ne 0 ]
+    if grep -q "hermes import" "${call_log}"; then
+        exit 1
+    fi
+}
+assert_succeeds "Scenario H: Malformed manifest fails restore without calling hermes import" test_manifest_malformed_scenario
+
+# Scenario I: Legacy backup missing manifest proceeds with warning
+test_manifest_legacy_missing_scenario() {
+    local tdir="${TEST_TMP_DIR}/rest_i"
+    mkdir -p "${tdir}/cfg/hermes-backup" "${tdir}/home" "${tdir}/logs"
+    local call_log="${tdir}/call.log"
+    touch "${call_log}"
+
+    cat <<EOF > "${tdir}/cfg/hermes-backup/state.env"
+STATE_SCHEMA_VERSION=1
+ENCRYPTION_ENABLED=false
+ENCRYPTION_MODE=none
+BASE_REMOTE=gdrive-hermes:
+BASE_PATH=HermesBackups
+CRYPT_REMOTE=
+CRYPT_PATH=
+RECOVERY_NOTICE_STATE=shown
+EOF
+    chmod 0600 "${tdir}/cfg/hermes-backup/state.env"
+
+    local rc=0
+    env \
+        HOME="${tdir}/home" \
+        XDG_CONFIG_HOME="${tdir}/cfg" \
+        PATH="${MOCK_BIN}:${PATH}" \
+        HERMES_BIN="${MOCK_BIN}/hermes" \
+        RESTORE_LOG_DIR="${tdir}/logs" \
+        MOCK_CALL_LOG="${call_log}" \
+        MOCK_MANIFEST_MISSING="true" \
+        REPO_DIR="${REPO_DIR}" \
+        bash "${REPO_DIR}/restore.sh" "hermes-backup-20-07-2026_14h00p00s.zip" || rc=$?
+
+    [ "${rc}" -eq 0 ]
+    grep -q "hermes import --force" "${call_log}"
+    grep -q "Legacy backup detected" "${tdir}/logs/restore.log"
+}
+assert_succeeds "Scenario I: Legacy backup missing manifest proceeds with warning" test_manifest_legacy_missing_scenario
 
 echo -e "\033[0;32mALL RESTORE INTEGRATION TESTS PASSED!\033[0m"
