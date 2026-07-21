@@ -62,6 +62,29 @@ strip_ansi() {
     sed -E 's/\x1B\[[0-9;]*[a-zA-Z]//g'
 }
 
+format_bytes() {
+    local bytes="${1:-0}"
+    if ! [[ "${bytes}" =~ ^[0-9]+$ ]]; then
+        echo "${bytes}"
+        return
+    fi
+    if [ "${bytes}" -lt 1024 ]; then
+        echo "${bytes} bytes"
+    elif [ "${bytes}" -lt 1048576 ]; then
+        local kb
+        kb="$(awk "BEGIN {printf \"%.2f\", ${bytes}/1024}")"
+        echo "${kb} KB (${bytes} bytes)"
+    elif [ "${bytes}" -lt 1073741824 ]; then
+        local mb
+        mb="$(awk "BEGIN {printf \"%.2f\", ${bytes}/1048576}")"
+        echo "${mb} MB (${bytes} bytes)"
+    else
+        local gb
+        gb="$(awk "BEGIN {printf \"%.2f\", ${bytes}/1073741824}")"
+        echo "${gb} GB (${bytes} bytes)"
+    fi
+}
+
 # ALL log output MUST go to stderr (>&2) to preserve clean stdout for function returns
 log_raw() {
     local timestamp

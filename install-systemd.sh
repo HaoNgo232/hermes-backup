@@ -234,12 +234,42 @@ IS_ACTIVE="$(systemctl --user is-active "${TIMER}" 2>/dev/null || echo "no")"
 
 echo ""
 echo -e "${C_BOLD}=== Systemd Timer Status ===${C_RESET}"
-echo -e "Timer enabled : ${C_GREEN}${IS_ENABLED}${C_RESET}"
-echo -e "Timer active  : ${C_GREEN}${IS_ACTIVE}${C_RESET}"
+if [ "${IS_ENABLED}" = "enabled" ]; then
+    echo -e "  Timer Enabled : ${BADGE_OK} enabled"
+else
+    echo -e "  Timer Enabled : ${BADGE_WARN} ${IS_ENABLED}"
+fi
+if [ "${IS_ACTIVE}" = "active" ]; then
+    echo -e "  Timer Active  : ${BADGE_OK} active"
+else
+    echo -e "  Timer Active  : ${BADGE_WARN} ${IS_ACTIVE}"
+fi
 
 if [ "${IS_ENABLED}" = "enabled" ] && [ "${IS_ACTIVE}" = "active" ]; then
-    echo "Next trigger  :"
-    systemctl --user list-timers "${TIMER}" --no-pager || true
+    timer_info="$(systemctl --user list-timers "${TIMER}" --no-pager --legend=false 2>/dev/null | grep "${TIMER}" | head -n1 || true)"
+    if [ -n "${timer_info}" ]; then
+        read -r -a tokens <<< "${timer_info}"
+        if [ "${tokens[0]}" = "-" ]; then
+            echo -e "  Next Run      : None scheduled"
+        else
+            last_idx=-1
+            for ((i=4; i<${#tokens[@]}-4; i++)); do
+                if [[ "${tokens[$i]}" =~ ^(Mon|Tue|Wed|Thu|Fri|Sat|Sun)$ ]]; then
+                    last_idx=$i
+                    break
+                fi
+            done
+            next_str="${tokens[0]} ${tokens[1]} ${tokens[2]} ${tokens[3]}"
+            if [ $last_idx -gt 4 ]; then
+                left_str="${tokens[*]:4:$((last_idx-4))}"
+            else
+                left_str="${tokens[4]:-} ${tokens[5]:-}"
+            fi
+            echo -e "  Next Run      : ${next_str} (${left_str} left)"
+        fi
+    else
+        systemctl --user list-timers "${TIMER}" --no-pager 2>/dev/null | grep -v -E "timers listed|Pass --all" | sed 's/^/  /' || true
+    fi
 else
     echo -e "${BADGE_WARN} ${C_YELLOW}Timer installation finished but timer state is enabled=${IS_ENABLED}, active=${IS_ACTIVE}.${C_RESET}" >&2
     exit 1

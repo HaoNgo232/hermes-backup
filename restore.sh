@@ -94,7 +94,7 @@ if [ "${dl_bytes}" -le 0 ]; then
     exit 1
 fi
 
-log_success "Download complete (${dl_bytes} bytes)."
+log_success "Download complete ($(format_bytes "${dl_bytes}"))."
 
 TMP_MANIFEST="${WORKSPACE}/${TARGET_FILE}.sha256"
 log_step "Verifying archive integrity manifest..."

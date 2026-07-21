@@ -18,6 +18,7 @@ fi
 
 HEALTH_OK=true
 
+
 if [ "${CHECK_ONLY}" = false ]; then
     echo -e "${C_CYAN}${C_BOLD}=====================================================================${C_RESET}"
     echo -e "${C_CYAN}${C_BOLD}                  HERMES BACKUP SYSTEM STATUS                        ${C_RESET}"
@@ -206,7 +207,40 @@ if [ "${CHECK_ONLY}" = false ]; then
         if [ "${TIMER_ENABLED_RAW}" = true ]; then
             echo ""
             echo -e "  ${C_BOLD}Next Scheduled Runs:${C_RESET}"
-            systemctl --user list-timers hermes-cloud-backup.timer --no-pager 2>/dev/null | sed 's/^/    /' || true
+            timer_info="$(systemctl --user list-timers hermes-cloud-backup.timer --no-pager --legend=false 2>/dev/null | grep "hermes-cloud-backup" | head -n1 || true)"
+            if [ -n "${timer_info}" ]; then
+                read -r -a tokens <<< "${timer_info}"
+                if [ "${tokens[0]}" = "-" ]; then
+                    echo -e "    Next Run       : None scheduled"
+                    if [ "${tokens[2]:-}" != "-" ] && [ "${#tokens[@]}" -ge 8 ]; then
+                        echo -e "    Last Run       : ${tokens[2]} ${tokens[3]} ${tokens[4]} ${tokens[5]} (${tokens[6]} ${tokens[7]})"
+                    fi
+                else
+                    last_idx=-1
+                    for ((i=4; i<${#tokens[@]}-4; i++)); do
+                        if [[ "${tokens[$i]}" =~ ^(Mon|Tue|Wed|Thu|Fri|Sat|Sun)$ ]]; then
+                            last_idx=$i
+                            break
+                        fi
+                    done
+
+                    next_str="${tokens[0]} ${tokens[1]} ${tokens[2]} ${tokens[3]}"
+                    if [ $last_idx -gt 4 ]; then
+                        left_str="${tokens[*]:4:$((last_idx-4))}"
+                    else
+                        left_str="${tokens[4]:-} ${tokens[5]:-}"
+                    fi
+                    echo -e "    Next Run       : ${next_str} (${left_str} left)"
+
+                    if [ $last_idx -ge 0 ]; then
+                        last_str="${tokens[$last_idx]} ${tokens[$last_idx+1]} ${tokens[$last_idx+2]} ${tokens[$last_idx+3]}"
+                        passed_str="${tokens[$last_idx+4]} ${tokens[$last_idx+5]}"
+                        echo -e "    Last Run       : ${last_str} (${passed_str})"
+                    fi
+                fi
+            else
+                systemctl --user list-timers hermes-cloud-backup.timer --no-pager 2>/dev/null | grep -v -E "timers listed|Pass --all" | sed 's/^/    /' || true
+            fi
         fi
 
         LINGER_STATUS="unknown"
@@ -257,9 +291,10 @@ fi
 echo -e "${C_BOLD}[4] Latest Cloud Backup:${C_RESET}"
 if [ -n "${LATEST_BACKUP}" ]; then
     IFS=';' read -r b_time b_file b_size <<< "${LATEST_BACKUP}"
+    formatted_size="$(format_bytes "${b_size}")"
     echo "  Filename         : ${b_file}"
     echo "  Timestamp        : ${b_time}"
-    echo "  Archive Size     : ${b_size} bytes"
+    echo "  Archive Size     : ${formatted_size}"
 elif [ "${LATEST_LIST_OK}" = false ]; then
     echo "  Filename         : Failed to list remote backups"
 else

@@ -285,4 +285,27 @@ if [ "${RUN_TEST}" = true ]; then
 fi
 
 echo ""
+echo -e "${C_CYAN}${C_BOLD}=====================================================================${C_RESET}"
+echo -e "${C_CYAN}${C_BOLD}                  HERMES BACKUP SETUP SUMMARY                        ${C_RESET}"
+echo -e "${C_CYAN}${C_BOLD}=====================================================================${C_RESET}"
+ACTIVE_DEST="$(encryption_get_active_destination)"
+ENC_MODE="$(state_get "ENCRYPTION_MODE" "none")"
+SUPER_COMP="$(state_get "ENABLE_SUPER_COMPRESSION" "false")"
+
+echo -e "  Cloud Destination : ${C_BOLD}${ACTIVE_DEST}${C_RESET}"
+echo -e "  Encryption Mode   : ${C_BOLD}${ENC_MODE}${C_RESET}"
+if [ "${SUPER_COMP}" = "true" ]; then
+    echo -e "  Super Compression : ${C_BOLD}ENABLED (.tar.xz)${C_RESET}"
+else
+    echo -e "  Super Compression : ${C_BOLD}DISABLED (.zip)${C_RESET}"
+fi
+echo -e "  Systemd Timer     : ${BADGE_OK} Active & Installed"
+echo ""
+echo -e "${C_BOLD}Useful Commands:${C_RESET}"
+echo -e "  Check Status      : ${C_CYAN}./status.sh${C_RESET}"
+echo -e "  Run Manual Backup : ${C_CYAN}./backup.sh${C_RESET}"
+echo -e "  Restore Backup    : ${C_CYAN}./restore.sh${C_RESET}"
+echo -e "${C_CYAN}${C_BOLD}=====================================================================${C_RESET}"
+
+echo ""
 echo -e "${C_GREEN}${C_BOLD}SETUP COMPLETE SUCCESSFUL!${C_RESET}"

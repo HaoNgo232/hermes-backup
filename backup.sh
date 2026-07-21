@@ -219,7 +219,7 @@ if [ "${USE_SUPER_COMPRESSION}" = "true" ]; then
     fi
 
     raw_zip_bytes=$(stat -c%s "${TMP_ZIP}" 2>/dev/null || du -b "${TMP_ZIP}" | cut -f1)
-    log_success "Raw ZIP archive created successfully (${raw_zip_bytes} bytes)."
+    log_success "Raw ZIP archive created successfully ($(format_bytes "${raw_zip_bytes}"))."
 
     log_step "[2/4] Decompressing and super-compressing to .tar.xz (-9e)..."
     mkdir -p "${TMP_EXTRACT}"
@@ -236,7 +236,15 @@ if [ "${USE_SUPER_COMPRESSION}" = "true" ]; then
     fi
 
     xz_bytes=$(stat -c%s "${TMP_XZ}" 2>/dev/null || du -b "${TMP_XZ}" | cut -f1)
-    log_success "Super-compressed .tar.xz archive created successfully (${xz_bytes} bytes)."
+    ratio=""
+    if [ "${raw_zip_bytes:-0}" -gt 0 ]; then
+        ratio="$(awk "BEGIN {printf \"%.1f\", (1 - ${xz_bytes}/${raw_zip_bytes}) * 100}")"
+    fi
+    if [ -n "${ratio}" ]; then
+        log_success "Super-compressed .tar.xz archive created successfully ($(format_bytes "${xz_bytes}") - reduced size by ${ratio}%)."
+    else
+        log_success "Super-compressed .tar.xz archive created successfully ($(format_bytes "${xz_bytes}"))."
+    fi
     UPLOAD_FILE="${TMP_XZ}"
 else
     ARCHIVE_NAME="hermes-backup-${TIMESTAMP}.zip"
@@ -256,7 +264,7 @@ else
     fi
 
     zip_bytes=$(stat -c%s "${TMP_ZIP}" 2>/dev/null || du -b "${TMP_ZIP}" | cut -f1)
-    log_success "ZIP archive created successfully (${zip_bytes} bytes)."
+    log_success "ZIP archive created successfully ($(format_bytes "${zip_bytes}"))."
     log_step "[2/4] Skipping super-compression (disabled in config)..."
     UPLOAD_FILE="${TMP_ZIP}"
 fi
